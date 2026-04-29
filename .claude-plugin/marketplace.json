@@ -1,21 +1,21 @@
 {
-  "name": "openai-codex",
+  "name": "codex-router",
   "owner": {
-    "name": "OpenAI"
+    "name": "Compound"
   },
   "metadata": {
-    "description": "Codex plugins to use in Claude Code for delegation and code review.",
+    "description": "Codex Router plugin for policy-backed Codex delegation and review.",
     "version": "1.0.4"
   },
   "plugins": [
     {
-      "name": "codex",
-      "description": "Use Codex from Claude Code to review code or delegate tasks.",
+      "name": "codex-router",
+      "description": "Route Claude Code work through Codex with reliable jobs and explicit policy controls.",
       "version": "1.0.4",
       "author": {
-        "name": "OpenAI"
+        "name": "Compound"
       },
-      "source": "./plugins/codex"
+      "source": "./plugins/codex-router"
     }
   ]
 }

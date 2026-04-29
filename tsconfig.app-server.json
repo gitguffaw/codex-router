@@ -13,11 +13,11 @@
     "types": ["node"]
   },
   "include": [
-    "plugins/codex/scripts/lib/app-server.mjs",
-    "plugins/codex/scripts/lib/codex.mjs",
-    "plugins/codex/scripts/lib/fs.mjs",
-    "plugins/codex/scripts/lib/process.mjs",
-    "plugins/codex/scripts/lib/app-server-protocol.d.ts",
-    "plugins/codex/.generated/app-server-types/**/*.ts"
+    "plugins/codex-router/scripts/lib/app-server.mjs",
+    "plugins/codex-router/scripts/lib/codex.mjs",
+    "plugins/codex-router/scripts/lib/fs.mjs",
+    "plugins/codex-router/scripts/lib/process.mjs",
+    "plugins/codex-router/scripts/lib/app-server-protocol.d.ts",
+    "plugins/codex-router/.generated/app-server-types/**/*.ts"
   ]
 }

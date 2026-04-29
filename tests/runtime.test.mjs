@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { loadBrokerSession, saveBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
-import { resolveStateDir } from "../plugins/codex/scripts/lib/state.mjs";
+import { loadBrokerSession, saveBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
+import { resolveStateDir } from "../plugins/codex-router/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex");
+const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
 const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "codex-companion.mjs");
 const STOP_HOOK = path.join(PLUGIN_ROOT, "scripts", "stop-review-gate-hook.mjs");
 const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mjs");
@@ -173,6 +173,71 @@ test("task runs when the active provider does not require OpenAI login", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Handled the requested task/);
+});
+
+test("analyze runs read-only with context-pack metadata", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "analyze", "--json", "inspect cache behavior"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.mode, "analyze");
+  assert.equal(payload.workflow, "Analyze");
+  assert.equal(payload.contextPack.id.startsWith("ctx-"), true);
+  assert.match(payload.rawOutput, /Handled the requested task/);
+});
+
+test("exec is write-capable and --best --xhigh --fast starts app-server with config overrides", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "exec", "--json", "--best", "--effort", "xhigh", "--fast", "fix cache behavior"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.mode, "exec");
+  assert.equal(payload.workflow, "Exec");
+  assert.equal(payload.model, "gpt-5.5");
+  assert.equal(payload.effort, "xhigh");
+  assert.equal(payload.serviceTier, "fast");
+
+  const state = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
+  assert.deepEqual(state.appServerArgs, [
+    "app-server",
+    "-c",
+    "service_tier=\"fast\"",
+    "-c",
+    "model_reasoning_effort=\"xhigh\""
+  ]);
+  assert.equal(state.lastTurnStart.model, "gpt-5.5");
+  assert.equal(state.lastTurnStart.effort, "xhigh");
+});
+
+test("unsupported V1 routing modifiers fail before silent downgrade", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "analyze", "--docs", "inspect current docs"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DocsMCP.*not enabled yet/);
 });
 
 test("task runs without auth preflight so Codex can refresh an expired session", () => {
@@ -850,7 +915,7 @@ test("review rejects focus text because it is native-review only", () => {
 
   assert.equal(result.status > 0, true);
   assert.match(result.stderr, /does not support custom focus text/i);
-  assert.match(result.stderr, /\/codex:adversarial-review focus on auth/i);
+  assert.match(result.stderr, /\/codex-router:adversarial-review focus on auth/i);
 });
 
 test("review rejects staged-only scope because it is native-review only", () => {
@@ -1009,7 +1074,7 @@ test("status shows phases, hints, and the latest finished job", () => {
   assert.match(result.stdout, /Active jobs:/);
   assert.match(result.stdout, /\| Job \| Kind \| Status \| Phase \| Elapsed \| Codex Session ID \| Summary \| Actions \|/);
   assert.match(result.stdout, /\| review-live \| review \| running \| reviewing \| .* \| thr_1 \| Review working tree diff \|/);
-  assert.match(result.stdout, /`\/codex:status review-live`<br>`\/codex:cancel review-live`/);
+  assert.match(result.stdout, /`\/codex-router:status review-live`<br>`\/codex-router:cancel review-live`/);
   assert.match(result.stdout, /Live details:/);
   assert.match(result.stdout, /Latest finished:/);
   assert.match(result.stdout, /Progress:/);
@@ -1896,8 +1961,8 @@ test("stop hook logs running tasks to stderr without blocking when the review ga
   assert.equal(blocked.status, 0, blocked.stderr);
   assert.equal(blocked.stdout.trim(), "");
   assert.match(blocked.stderr, /Codex task task-live is still running/i);
-  assert.match(blocked.stderr, /\/codex:status/i);
-  assert.match(blocked.stderr, /\/codex:cancel task-live/i);
+  assert.match(blocked.stderr, /\/codex-router:status/i);
+  assert.match(blocked.stderr, /\/codex-router:cancel task-live/i);
 });
 
 test("stop hook allows the stop when the review gate is enabled and the stop-time review task is clean", () => {
@@ -1949,7 +2014,7 @@ test("stop hook does not block when Codex is unavailable even if the review gate
   assert.equal(allowed.status, 0, allowed.stderr);
   assert.equal(allowed.stdout.trim(), "");
   assert.match(allowed.stderr, /Codex is not set up for the review gate/i);
-  assert.match(allowed.stderr, /Run \/codex:setup/i);
+  assert.match(allowed.stderr, /Run \/codex-router:setup/i);
 });
 
 test("stop hook runs the actual task when auth status looks stale", () => {

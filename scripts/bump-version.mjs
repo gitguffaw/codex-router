@@ -39,7 +39,7 @@ const TARGETS = [
     ]
   },
   {
-    file: "plugins/codex/.claude-plugin/plugin.json",
+    file: "plugins/codex-router/.claude-plugin/plugin.json",
     values: [
       {
         label: "version",
@@ -132,7 +132,7 @@ function requireObject(value, label) {
 }
 
 function findMarketplacePlugin(json) {
-  const plugin = json.plugins?.find((entry) => entry?.name === "codex");
+  const plugin = json.plugins?.find((entry) => entry?.name === "codex-router");
   requireObject(plugin, ".claude-plugin/marketplace.json plugins[codex]");
   return plugin;
 }

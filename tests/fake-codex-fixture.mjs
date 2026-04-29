@@ -18,7 +18,7 @@ const readline = require("node:readline");
 
 	function loadState() {
 	  if (!fs.existsSync(STATE_PATH)) {
-	    return { nextThreadId: 1, nextTurnId: 1, appServerStarts: 0, threads: [], capabilities: null, lastInterrupt: null };
+	    return { nextThreadId: 1, nextTurnId: 1, appServerStarts: 0, appServerArgs: [], threads: [], capabilities: null, lastInterrupt: null };
 	  }
 	  return JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
 	}
@@ -236,6 +236,41 @@ if (args[0] === "--version") {
   console.log("codex-cli test");
   process.exit(0);
 }
+if (args[0] === "debug" && args[1] === "models") {
+  console.log(JSON.stringify({
+    models: [
+      {
+        slug: "gpt-5.5",
+        visibility: "list",
+        priority: 0,
+        supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }],
+        additional_speed_tiers: ["fast"]
+      },
+      {
+        slug: "gpt-5.4-mini",
+        visibility: "list",
+        priority: 5,
+        supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }],
+        additional_speed_tiers: ["fast"]
+      },
+      {
+        slug: "gpt-5.3-codex-spark",
+        visibility: "list",
+        priority: 10,
+        supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }],
+        additional_speed_tiers: []
+      },
+      {
+        slug: "hidden-model",
+        visibility: "hidden",
+        priority: -1,
+        supported_reasoning_levels: [{ effort: "xhigh" }],
+        additional_speed_tiers: ["fast"]
+      }
+    ]
+  }));
+  process.exit(0);
+}
 if (args[0] === "app-server" && args[1] === "--help") {
   console.log("fake app-server help");
   process.exit(0);
@@ -256,6 +291,7 @@ if (args[0] !== "app-server") {
 }
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
+bootState.appServerArgs = args;
 saveState(bootState);
 
 const rl = readline.createInterface({ input: process.stdin });
