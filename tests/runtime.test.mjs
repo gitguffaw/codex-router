@@ -225,6 +225,103 @@ test("exec is write-capable and --best --xhigh --fast starts app-server with con
   assert.equal(state.lastTurnStart.effort, "xhigh");
 });
 
+test("analyze --background enqueues a router job with analyze metadata", async () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+
+  const launched = run("node", [SCRIPT, "analyze", "--background", "--json", "inspect cache behavior"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(launched.status, 0, launched.stderr);
+  const launchPayload = JSON.parse(launched.stdout);
+  assert.match(launchPayload.jobId, /^analyze-/);
+  assert.equal(launchPayload.status, "queued");
+  assert.equal(launchPayload.title, "Codex Analyze");
+
+  const waitedStatus = run("node", [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(waitedStatus.status, 0, waitedStatus.stderr);
+  const waitedPayload = JSON.parse(waitedStatus.stdout);
+  assert.equal(waitedPayload.job.status, "completed");
+  assert.equal(waitedPayload.job.kindLabel, "analyze");
+
+  const resultPayload = await waitFor(() => {
+    const result = run("node", [SCRIPT, "result", launchPayload.jobId, "--json"], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    if (result.status !== 0) {
+      return null;
+    }
+    return JSON.parse(result.stdout);
+  });
+
+  assert.equal(resultPayload.job.kind, "analyze");
+  assert.equal(resultPayload.storedJob.result.mode, "analyze");
+  assert.equal(resultPayload.storedJob.result.workflow, "Analyze");
+  assert.equal(resultPayload.storedJob.result.contextPack.id.startsWith("ctx-"), true);
+
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.match(fakeState.lastTurnStart.prompt, /<structured_output_contract>/);
+});
+
+test("exec --background enqueues a write-capable router job with exec metadata", async () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+
+  const launched = run("node", [SCRIPT, "exec", "--background", "--json", "fix cache behavior"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(launched.status, 0, launched.stderr);
+  const launchPayload = JSON.parse(launched.stdout);
+  assert.match(launchPayload.jobId, /^exec-/);
+  assert.equal(launchPayload.status, "queued");
+  assert.equal(launchPayload.title, "Codex Exec");
+
+  const waitedStatus = run("node", [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(waitedStatus.status, 0, waitedStatus.stderr);
+  const waitedPayload = JSON.parse(waitedStatus.stdout);
+  assert.equal(waitedPayload.job.status, "completed");
+  assert.equal(waitedPayload.job.kindLabel, "exec");
+  assert.equal(waitedPayload.job.write, true);
+
+  const resultPayload = await waitFor(() => {
+    const result = run("node", [SCRIPT, "result", launchPayload.jobId, "--json"], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    if (result.status !== 0) {
+      return null;
+    }
+    return JSON.parse(result.stdout);
+  });
+
+  assert.equal(resultPayload.job.kind, "exec");
+  assert.equal(resultPayload.storedJob.result.mode, "exec");
+  assert.equal(resultPayload.storedJob.result.workflow, "Exec");
+  assert.equal(resultPayload.storedJob.result.contextPack.id.startsWith("ctx-"), true);
+
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.match(fakeState.lastTurnStart.prompt, /<completion_contract>/);
+});
+
 test("unsupported V1 routing modifiers fail before silent downgrade", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
@@ -702,7 +799,7 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   run("git", ["add", "README.md"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
-  const result = run("node", [SCRIPT, "task", "--model", "spark", "--effort", "low", "diagnose the failing test"], {
+  const result = run("node", [SCRIPT, "task", "--model", " SpArK ", "--effort", " LOW ", "diagnose the failing test"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
@@ -711,6 +808,26 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
   assert.equal(fakeState.lastTurnStart.model, "gpt-5.3-codex-spark");
   assert.equal(fakeState.lastTurnStart.effort, "low");
+});
+
+test("task forwards explicit model names without catalog resolution", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "--model", " custom-model ", "diagnose the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, "custom-model");
 });
 
 test("task logs reasoning summaries and assistant messages to the job log", () => {

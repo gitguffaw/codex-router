@@ -26,3 +26,26 @@ test("context pack records policy hash, workflow, request, modifiers, and non-go
   assert.deepEqual(stored.nonGoals, ["Do not edit files."]);
   assert.ok(stored.policyFiles.some((file) => file.path === "SKILL.md"));
 });
+
+test("context pack ids change with request data while policy hash remains stable", () => {
+  const workspace = makeTempDir();
+  const first = createContextPack(workspace, {
+    mode: "analyze",
+    workflow: "Analyze",
+    userRequest: "inspect cache behavior",
+    prompt: "first routed prompt",
+    modifiers: ["webSearch"]
+  });
+  const second = createContextPack(workspace, {
+    mode: "analyze",
+    workflow: "Analyze",
+    userRequest: "inspect cache behavior differently",
+    prompt: "second routed prompt",
+    modifiers: ["webSearch"]
+  });
+
+  assert.notEqual(first.id, second.id);
+  assert.equal(first.policyHash, second.policyHash);
+  assert.ok(fs.existsSync(first.file));
+  assert.ok(fs.existsSync(second.file));
+});

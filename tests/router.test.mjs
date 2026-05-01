@@ -25,6 +25,19 @@ test("search modifies prompt without changing launch surface", () => {
   assert.match(route.prompt, /<web_search>/);
 });
 
+test("exec search keeps write mode while constraining web use in the prompt", () => {
+  const route = buildRouterRequest({ mode: "exec", prompt: "fix the docs integration", options: { search: true } });
+  assert.equal(route.sandbox, "workspace-write");
+  assert.equal(route.write, true);
+  assert.deepEqual(route.modifiers, ["webSearch"]);
+  assert.match(route.prompt, /Use Codex web search only where current external facts materially affect the implementation/);
+});
+
+test("router rejects empty prompts and unsupported modes", () => {
+  assert.throws(() => buildRouterRequest({ mode: "analyze", prompt: "   ", options: {} }), /Provide a prompt/);
+  assert.throws(() => buildRouterRequest({ mode: "parallel", prompt: "x", options: {} }), /Unsupported router mode/);
+});
+
 test("docs, tool, and parallel guardrails fail explicitly", () => {
   assert.throws(
     () => buildRouterRequest({ mode: "analyze", prompt: "x", options: { docs: true } }),

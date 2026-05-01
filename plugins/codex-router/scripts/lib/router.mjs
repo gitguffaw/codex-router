@@ -94,7 +94,6 @@ export function buildRouterRequest({ mode, prompt, options = {}, modelControls =
     model: modelControls.model ?? null,
     effort: modelControls.effort ?? null,
     serviceTier: modelControls.serviceTier ?? null,
-    configOverrides: modelControls.configOverrides ?? {},
-    resultStates: ["queued", "running", "completed", "completed-with-warnings", "blocked", "failed", "interrupted", "cancelled"]
+    configOverrides: modelControls.configOverrides ?? {}
   };
 }

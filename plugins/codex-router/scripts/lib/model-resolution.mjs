@@ -62,24 +62,47 @@ function chooseBest(catalog, { effort = null, fast = false } = {}) {
   return candidates[0] ?? null;
 }
 
-function validateEffort(effort) {
+function validateEffort(effort, original = effort) {
   if (effort && !VALID_EFFORTS.has(effort)) {
-    throw new Error(`Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`);
+    throw new Error(`Unsupported reasoning effort "${original}". Use one of: none, minimal, low, medium, high, xhigh.`);
   }
 }
 
-export function resolveModelControls(input = {}, options = {}) {
-  const effort = input.effort ? String(input.effort).toLowerCase() : null;
-  validateEffort(effort);
+export function normalizeModelControl(model) {
+  if (model == null) {
+    return null;
+  }
+  const normalized = String(model).trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.toLowerCase() === "spark" ? SPARK_MODEL : normalized;
+}
 
-  const needsCatalog = Boolean(input.model || input.spark || input.best || input.fast);
+export function normalizeEffortControl(effort) {
+  if (effort == null) {
+    return null;
+  }
+  const normalized = String(effort).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  validateEffort(normalized, effort);
+  return normalized;
+}
+
+export function resolveModelControls(input = {}, options = {}) {
+  const model = normalizeModelControl(input.model);
+  const effort = normalizeEffortControl(input.effort);
+
+  const needsCatalog = Boolean(model || input.spark || input.best || input.fast);
   const catalog = options.catalog ?? (needsCatalog ? readModelCatalog(options.cwd ?? process.cwd(), options) : []);
   let selected = null;
 
-  if (input.model) {
-    selected = findModel(catalog, input.model);
+  if (model) {
+    selected = findModel(catalog, model);
     if (!selected) {
-      throw new Error(`Requested Codex model "${input.model}" is not available in \`codex debug models\`.`);
+      throw new Error(`Requested Codex model "${model}" is not available in \`codex debug models\`.`);
     }
   } else if (input.spark) {
     selected = findModel(catalog, SPARK_MODEL);

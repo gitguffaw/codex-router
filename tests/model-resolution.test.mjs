@@ -68,3 +68,20 @@ test("no model flags inherit Codex config while preserving effort config overrid
     model_reasoning_effort: "high"
   });
 });
+
+test("model and effort controls are normalized at the resolver boundary", () => {
+  const result = resolveModelControls({ model: " spark ", effort: " LOW " }, { catalog });
+  assert.equal(result.model, "gpt-5.3-codex-spark");
+  assert.equal(result.effort, "low");
+  assert.deepEqual(result.configOverrides, {
+    model_reasoning_effort: "low"
+  });
+});
+
+test("empty model and effort controls inherit Codex config without catalog lookup", () => {
+  const result = resolveModelControls({ model: " ", effort: " " }, { catalog: [] });
+  assert.equal(result.model, null);
+  assert.equal(result.effort, null);
+  assert.equal(result.resolvedFrom, "codex-config");
+  assert.deepEqual(result.configOverrides, {});
+});
