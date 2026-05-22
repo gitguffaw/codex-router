@@ -2,7 +2,7 @@
 
 Use Codex from inside Claude Code with policy-backed routing, model selection, code reviews, and delegated tasks.
 
-This private fork is based on OpenAI's `codex-plugin-cc` runtime and adds the `codex-router` command namespace. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
+Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
 <video src="./docs/plugin-demo.webm" controls muted playsinline autoplay></video>
 
@@ -13,6 +13,10 @@ This private fork is based on OpenAI's `codex-plugin-cc` runtime and adds the `c
 - `/codex-router:review` for a normal read-only Codex review
 - `/codex-router:adversarial-review` for a steerable challenge review
 - `/codex-router:rescue`, `/codex-router:status`, `/codex-router:result`, and `/codex-router:cancel` to delegate work and manage background jobs
+
+## Provenance
+
+This codebase began as a private fork of OpenAI's `codex-plugin-cc` runtime as a bootstrap path. Codex Router keeps required Apache-2.0/OpenAI attribution for upstream-derived parts, but it is not an ongoing tracking fork; changes are made when Codex Router behavior, compatibility, or user needs require them. See [ADR 0001](./docs/adr/0001-accept-upstream-provenance.md).
 
 ## Requirements
 
