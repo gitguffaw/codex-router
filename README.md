@@ -1,10 +1,8 @@
-# Codex Router plugin for Claude Code
+# Codex Router for Claude Code
 
 Use Codex from inside Claude Code with policy-backed routing, model selection, code reviews, and delegated tasks.
 
 Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
-
-<video src="./docs/plugin-demo.webm" controls muted playsinline autoplay></video>
 
 ## What You Get
 
@@ -14,22 +12,19 @@ Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` comm
 - `/codex-router:adversarial-review` for a steerable challenge review
 - `/codex-router:rescue`, `/codex-router:status`, `/codex-router:result`, and `/codex-router:cancel` to delegate work and manage background jobs
 
-## Provenance
-
-This codebase began as a private fork of OpenAI's `codex-plugin-cc` runtime as a bootstrap path. Codex Router keeps required Apache-2.0/OpenAI attribution for upstream-derived parts, but it is not an ongoing tracking fork; changes are made when Codex Router behavior, compatibility, or user needs require them. See [ADR 0001](./docs/adr/0001-accept-upstream-provenance.md).
-
 ## Requirements
 
 - **ChatGPT subscription (incl. Free) or OpenAI API key.**
   - Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
 - **Node.js 18.18 or later**
+- **Claude Code with plugin support**
 
 ## Install
 
-Add the private marketplace in Claude Code after publishing or wiring this repository as a local marketplace:
+In Claude Code, add this repository as a plugin marketplace:
 
 ```bash
-/plugin marketplace add <private-codex-router-source>
+/plugin marketplace add gitguffaw/codex-router
 ```
 
 Install the plugin:
@@ -44,7 +39,7 @@ Reload plugins:
 /reload-plugins
 ```
 
-Then run:
+Check your local Codex setup:
 
 ```bash
 /codex-router:setup
@@ -64,6 +59,26 @@ If Codex is installed but not logged in yet, run:
 !codex login
 ```
 
+### Local Checkout
+
+To test from a local checkout instead of GitHub:
+
+```bash
+git clone https://github.com/gitguffaw/codex-router.git
+cd codex-router
+```
+
+Then, inside Claude Code:
+
+```bash
+/plugin marketplace add /path/to/codex-router
+/plugin install codex-router@codex-router
+/reload-plugins
+/codex-router:setup
+```
+
+## Quick Start
+
 After install, you should see:
 
 - the slash commands listed below
@@ -73,6 +88,14 @@ One simple first run is:
 
 ```bash
 /codex-router:review --background
+/codex-router:status
+/codex-router:result
+```
+
+For implementation work, hand a bounded task to Codex:
+
+```bash
+/codex-router:exec --background fix the failing test with the smallest safe change
 /codex-router:status
 /codex-router:result
 ```
@@ -278,7 +301,7 @@ Then check in with:
 
 ## Codex Integration
 
-The Codex plugin wraps the [Codex app server](https://developers.openai.com/codex/app-server). It uses the global `codex` binary installed in your environment and [applies the same configuration](https://developers.openai.com/codex/config-basic).
+Codex Router wraps the [Codex app server](https://developers.openai.com/codex/app-server). It uses the global `codex` binary installed in your environment and [applies the same configuration](https://developers.openai.com/codex/config-basic).
 
 ### Common Configurations
 
@@ -330,3 +353,11 @@ Yes. If you already use Codex, the plugin picks up the same [configuration](#com
 Yes. Because the plugin uses your local Codex CLI, your existing sign-in method and config still apply.
 
 If you need to point the built-in OpenAI provider at a different endpoint, set `openai_base_url` in your [Codex config](https://developers.openai.com/codex/config-advanced/#config-and-state-locations).
+
+## License and Attribution
+
+Codex Router is licensed under the [Apache License 2.0](./LICENSE).
+
+This repository includes code derived from OpenAI's `codex-plugin-cc` runtime and preserves the required OpenAI attribution in [NOTICE](./NOTICE) and [plugins/codex-router/NOTICE](./plugins/codex-router/NOTICE). See [ADR 0001](./docs/adr/0001-accept-upstream-provenance.md) for the provenance decision.
+
+Codex Router is an independent project and is not affiliated with OpenAI or Anthropic. OpenAI, Codex, Anthropic, Claude, and Claude Code are trademarks of their respective owners.

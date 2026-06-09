@@ -5,6 +5,21 @@
   "type": "module",
   "description": "Route Claude Code work through Codex with policy-backed modes, model resolution, and reliable job handling.",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/gitguffaw/codex-router#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gitguffaw/codex-router.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gitguffaw/codex-router/issues"
+  },
+  "keywords": [
+    "codex",
+    "claude-code",
+    "plugin",
+    "review",
+    "delegation"
+  ],
   "engines": {
     "node": ">=18.18.0"
   },

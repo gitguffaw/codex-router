@@ -1,5 +1,7 @@
 {
   "name": "codex-router",
+  "description": "Policy-backed Codex delegation and review for Claude Code.",
+  "version": "1.0.4",
   "owner": {
     "name": "Compound"
   },
@@ -10,11 +12,27 @@
   "plugins": [
     {
       "name": "codex-router",
+      "displayName": "Codex Router",
       "description": "Route Claude Code work through Codex with reliable jobs and explicit policy controls.",
       "version": "1.0.4",
       "author": {
         "name": "Compound"
       },
+      "homepage": "https://github.com/gitguffaw/codex-router#readme",
+      "repository": "https://github.com/gitguffaw/codex-router",
+      "license": "Apache-2.0",
+      "keywords": [
+        "codex",
+        "claude-code",
+        "review",
+        "delegation"
+      ],
+      "category": "development-tools",
+      "tags": [
+        "codex",
+        "review",
+        "automation"
+      ],
       "source": "./plugins/codex-router"
     }
   ]

@@ -1,8 +1,18 @@
 {
   "name": "codex-router",
+  "displayName": "Codex Router",
   "version": "1.0.4",
   "description": "Route Claude Code work through Codex with reliable jobs and explicit policy controls.",
   "author": {
     "name": "Compound"
-  }
+  },
+  "homepage": "https://github.com/gitguffaw/codex-router#readme",
+  "repository": "https://github.com/gitguffaw/codex-router",
+  "license": "Apache-2.0",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "review",
+    "delegation"
+  ]
 }
