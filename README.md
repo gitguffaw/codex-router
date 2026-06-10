@@ -358,6 +358,6 @@ If you need to point the built-in OpenAI provider at a different endpoint, set `
 
 Codex Router is licensed under the [Apache License 2.0](./LICENSE).
 
-This repository includes code derived from OpenAI's `codex-plugin-cc` runtime and preserves the required OpenAI attribution in [NOTICE](./NOTICE) and [plugins/codex-router/NOTICE](./plugins/codex-router/NOTICE). See [ADR 0001](./docs/adr/0001-accept-upstream-provenance.md) for the provenance decision.
+This repository includes code derived from OpenAI's `codex-plugin-cc` runtime and preserves the required OpenAI attribution in [NOTICE](./NOTICE) and [plugins/codex-router/NOTICE](./plugins/codex-router/NOTICE).
 
 Codex Router is an independent project and is not affiliated with OpenAI or Anthropic. OpenAI, Codex, Anthropic, Claude, and Claude Code are trademarks of their respective owners.

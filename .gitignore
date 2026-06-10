@@ -148,3 +148,11 @@ vite.config.ts.timestamp-*
 
 output/
 plugins/codex-router/.generated/
+
+# Internal planning artifacts
+CONTEXT.md
+CONTEXT-MAP.md
+docs/adr/
+docs/brainstorms/
+docs/plans/
+todos/
