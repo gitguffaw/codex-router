@@ -223,6 +223,12 @@ test("exec is write-capable and --best --xhigh --fast starts app-server with con
   ]);
   assert.equal(state.lastTurnStart.model, "gpt-5.5");
   assert.equal(state.lastTurnStart.effort, "xhigh");
+
+  const stateDir = resolveStateDir(repo);
+  const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(routerState.jobs[0].model, "gpt-5.5");
+  assert.equal(routerState.jobs[0].effort, "xhigh");
+  assert.equal(routerState.jobs[0].serviceTier, "fast");
 });
 
 test("analyze --background enqueues a router job with analyze metadata", async () => {
@@ -280,7 +286,7 @@ test("exec --background enqueues a write-capable router job with exec metadata",
   installFakeCodex(binDir, "slow-task");
   initGitRepo(repo);
 
-  const launched = run("node", [SCRIPT, "exec", "--background", "--json", "fix cache behavior"], {
+  const launched = run("node", [SCRIPT, "exec", "--background", "--json", "--best", "--effort", "xhigh", "--fast", "fix cache behavior"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
@@ -301,6 +307,9 @@ test("exec --background enqueues a write-capable router job with exec metadata",
   assert.equal(waitedPayload.job.status, "completed");
   assert.equal(waitedPayload.job.kindLabel, "exec");
   assert.equal(waitedPayload.job.write, true);
+  assert.equal(waitedPayload.job.model, "gpt-5.5");
+  assert.equal(waitedPayload.job.effort, "xhigh");
+  assert.equal(waitedPayload.job.serviceTier, "fast");
 
   const resultPayload = await waitFor(() => {
     const result = run("node", [SCRIPT, "result", launchPayload.jobId, "--json"], {
@@ -317,6 +326,9 @@ test("exec --background enqueues a write-capable router job with exec metadata",
   assert.equal(resultPayload.storedJob.result.mode, "exec");
   assert.equal(resultPayload.storedJob.result.workflow, "Exec");
   assert.equal(resultPayload.storedJob.result.contextPack.id.startsWith("ctx-"), true);
+  assert.equal(resultPayload.storedJob.model, "gpt-5.5");
+  assert.equal(resultPayload.storedJob.effort, "xhigh");
+  assert.equal(resultPayload.storedJob.serviceTier, "fast");
 
   const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
   assert.match(fakeState.lastTurnStart.prompt, /<completion_contract>/);
@@ -808,6 +820,88 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
   assert.equal(fakeState.lastTurnStart.model, "gpt-5.3-codex-spark");
   assert.equal(fakeState.lastTurnStart.effort, "low");
+
+  const stateDir = resolveStateDir(repo);
+  const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(routerState.jobs[0].model, "gpt-5.3-codex-spark");
+  assert.equal(routerState.jobs[0].effort, "low");
+  assert.equal(routerState.jobs[0].serviceTier, null);
+  const storedJob = JSON.parse(fs.readFileSync(path.join(stateDir, "jobs", `${routerState.jobs[0].id}.json`), "utf8"));
+  assert.equal(storedJob.model, "gpt-5.3-codex-spark");
+  assert.equal(storedJob.effort, "low");
+});
+
+test("job lifecycle records completed-with-warnings from Codex warning notifications", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "turn-warning");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "diagnose the warning path"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const stateDir = resolveStateDir(repo);
+  const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(routerState.jobs[0].status, "completed-with-warnings");
+  assert.deepEqual(routerState.jobs[0].warnings, ["Model completed with a recoverable warning."]);
+  const storedJob = JSON.parse(fs.readFileSync(path.join(stateDir, "jobs", `${routerState.jobs[0].id}.json`), "utf8"));
+  assert.equal(storedJob.status, "completed-with-warnings");
+  assert.deepEqual(storedJob.result.warnings, ["Model completed with a recoverable warning."]);
+});
+
+test("job lifecycle records blocked Codex turns as blocked", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "turn-blocked");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "try the blocked path"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 1);
+  const stateDir = resolveStateDir(repo);
+  const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(routerState.jobs[0].status, "blocked");
+  assert.equal(routerState.jobs[0].phase, "blocked");
+
+  const resultPayload = run("node", [SCRIPT, "result", routerState.jobs[0].id, "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(resultPayload.status, 0, resultPayload.stderr);
+  assert.equal(JSON.parse(resultPayload.stdout).job.status, "blocked");
+});
+
+test("job lifecycle records interrupted Codex turns as interrupted", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "turn-interrupted");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "try the interrupted path"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 1);
+  const stateDir = resolveStateDir(repo);
+  const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(routerState.jobs[0].status, "interrupted");
+  assert.equal(routerState.jobs[0].phase, "interrupted");
 });
 
 test("task forwards explicit model names without catalog resolution", () => {

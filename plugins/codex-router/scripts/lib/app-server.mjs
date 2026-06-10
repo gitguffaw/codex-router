@@ -32,6 +32,7 @@ const DEFAULT_CLIENT_INFO = {
 /** @type {InitializeCapabilities} */
 const DEFAULT_CAPABILITIES = {
   experimentalApi: false,
+  requestAttestation: false,
   optOutNotificationMethods: [
     "item/agentMessage/delta",
     "item/reasoning/summaryTextDelta",

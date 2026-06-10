@@ -27,6 +27,7 @@
  *   lastAgentMessage: string,
  *   reviewText: string,
  *   reasoningSummary: string[],
+ *   warnings: string[],
  *   error: unknown,
  *   messages: Array<{ lifecycle: string, phase: string | null, text: string }>,
  *   fileChanges: ThreadItem[],
@@ -292,6 +293,57 @@ function describeCompletedItem(state, item) {
   }
 }
 
+function warningMessageForNotification(message) {
+  switch (message.method) {
+    case "warning":
+    case "guardianWarning":
+      return message.params?.message ?? null;
+    case "deprecationNotice":
+      return [message.params?.summary, message.params?.details].filter(Boolean).join(": ") || null;
+    case "configWarning":
+      return [message.params?.summary, message.params?.details].filter(Boolean).join(": ") || null;
+    default:
+      return null;
+  }
+}
+
+function isWarningNotification(message) {
+  return ["warning", "guardianWarning", "deprecationNotice", "configWarning"].includes(message.method);
+}
+
+function normalizeCodexErrorInfo(errorInfo) {
+  if (!errorInfo) {
+    return null;
+  }
+  if (typeof errorInfo === "string") {
+    return errorInfo;
+  }
+  if (typeof errorInfo === "object" && !Array.isArray(errorInfo)) {
+    return Object.keys(errorInfo)[0] ?? null;
+  }
+  return null;
+}
+
+function isBlockedTurnError(error) {
+  const code = normalizeCodexErrorInfo(error?.codexErrorInfo);
+  return ["contextWindowExceeded", "usageLimitExceeded", "cyberPolicy", "unauthorized"].includes(code);
+}
+
+function buildJobStatus(turnState) {
+  const turnStatus = turnState.finalTurn?.status ?? (turnState.error ? "failed" : "failed");
+  if (turnStatus === "completed") {
+    return turnState.warnings.length > 0 ? "completed-with-warnings" : "completed";
+  }
+  if (turnStatus === "interrupted") {
+    return "interrupted";
+  }
+  const turnError = turnState.error ?? turnState.finalTurn?.error ?? null;
+  if (turnStatus === "failed" && isBlockedTurnError(turnError)) {
+    return "blocked";
+  }
+  return "failed";
+}
+
 /** @returns {TurnCaptureState} */
 function createTurnCaptureState(threadId, options = {}) {
   let resolveCompletion;
@@ -321,6 +373,7 @@ function createTurnCaptureState(threadId, options = {}) {
     lastAgentMessage: "",
     reviewText: "",
     reasoningSummary: [],
+    warnings: [],
     error: null,
     messages: [],
     fileChanges: [],
@@ -531,6 +584,17 @@ function applyTurnNotification(state, message) {
       state.error = message.params.error;
       emitProgress(state.onProgress, `Codex error: ${message.params.error.message}`, "failed");
       break;
+    case "warning":
+    case "guardianWarning":
+    case "deprecationNotice":
+    case "configWarning": {
+      const warning = warningMessageForNotification(message);
+      if (warning) {
+        state.warnings.push(warning);
+        emitProgress(state.onProgress, `Codex warning: ${shorten(warning, 96)}`, null);
+      }
+      break;
+    }
     case "turn/completed":
       if ((message.params.threadId ?? null) !== state.threadId) {
         state.activeSubagentTurns.delete(message.params.threadId);
@@ -562,6 +626,14 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     if (message.method === "thread/started" || message.method === "thread/name/updated") {
       applyTurnNotification(state, message);
       return;
+    }
+
+    if (isWarningNotification(message)) {
+      const warningThreadId = extractThreadId(message);
+      if (!warningThreadId || state.threadIds.has(warningThreadId)) {
+        applyTurnNotification(state, message);
+        return;
+      }
     }
 
     if (!belongsToTurn(state, message)) {
@@ -663,7 +735,8 @@ async function resumeThread(client, threadId, cwd, options = {}) {
 }
 
 function buildResultStatus(turnState) {
-  return turnState.finalTurn?.status === "completed" ? 0 : 1;
+  const jobStatus = buildJobStatus(turnState);
+  return jobStatus === "completed" || jobStatus === "completed-with-warnings" ? 0 : 1;
 }
 
 const BUILTIN_PROVIDER_LABELS = new Map([
@@ -954,11 +1027,14 @@ export async function runAppServerReview(cwd, options = {}) {
 
     return {
       status: buildResultStatus(turnState),
+      jobStatus: buildJobStatus(turnState),
+      turnStatus: turnState.finalTurn?.status ?? null,
       threadId: turnState.threadId,
       sourceThreadId,
       turnId: turnState.turnId,
       reviewText: turnState.reviewText,
       reasoningSummary: turnState.reasoningSummary,
+      warnings: turnState.warnings,
       turn: turnState.finalTurn,
       error: turnState.error,
       stderr: cleanCodexStderr(client.stderr)
@@ -1019,10 +1095,13 @@ export async function runAppServerTurn(cwd, options = {}) {
 
     return {
       status: buildResultStatus(turnState),
+      jobStatus: buildJobStatus(turnState),
+      turnStatus: turnState.finalTurn?.status ?? null,
       threadId,
       turnId: turnState.turnId,
       finalMessage: turnState.lastAgentMessage,
       reasoningSummary: turnState.reasoningSummary,
+      warnings: turnState.warnings,
       turn: turnState.finalTurn,
       error: turnState.error,
       stderr: cleanCodexStderr(client.stderr),

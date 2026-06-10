@@ -19,7 +19,7 @@ import {
   renderStoredJobResult
 } from "./render.mjs";
 import { listJobs, upsertJob, writeJobFile } from "./state.mjs";
-import { appendLogLine, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { appendLogLine, isActiveJobStatus, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
@@ -66,10 +66,6 @@ function renderStatusPayload(report, asJson) {
   return asJson ? report : renderStatusReport(report);
 }
 
-function isActiveJobStatus(status) {
-  return status === "queued" || status === "running";
-}
-
 export function getCurrentClaudeSessionId() {
   return process.env[SESSION_ID_ENV] ?? null;
 }
@@ -88,8 +84,7 @@ export function findLatestResumableTaskJob(jobs) {
       (job) =>
         job.jobClass === "task" &&
         job.threadId &&
-        job.status !== "queued" &&
-        job.status !== "running"
+        !isActiveJobStatus(job.status)
     ) ?? null
   );
 }

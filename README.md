@@ -113,9 +113,11 @@ Examples:
 /codex-router:analyze --search compare this repository against the latest upstream docs
 ```
 
+`--search` is a prompt-level routing hint. Codex Router adds web-search instructions to the Codex prompt, but it does not run web search itself and does not pass a dedicated search flag through the Codex app server. Treat search-dependent output as best effort and ask Codex for sources when current external facts matter.
+
 ### `/codex-router:exec`
 
-Runs a write-capable Codex execution job. This is the only V1 router command that intentionally allows file edits.
+Runs a direct write-capable Codex execution job. Use this when you explicitly want Codex to make a bounded implementation change. Read-only commands such as `/codex-router:analyze` and `/codex-router:review` do not edit files; `/codex-router:rescue` may also make edits when you hand Codex a fix task.
 
 Examples:
 
@@ -123,6 +125,12 @@ Examples:
 /codex-router:exec --best --effort xhigh --fast fix the failing cache test
 /codex-router:exec --background implement the smallest safe fix
 ```
+
+### Unsupported V1 Modifiers
+
+Codex Router V1 parses `--docs`, `--tool`, and `--parallel`, but intentionally fails with a clear error instead of silently downgrading them.
+
+`--parallel` is reserved for future lane orchestration, where one request could be split across multiple coordinated Codex roles and then merged. It is disabled in V1 because parallel write ownership, cancellation, result merging, and conflict handling need stricter guarantees than the current single-job router provides.
 
 ### `/codex-router:review`
 
@@ -136,7 +144,7 @@ Use it when you want:
 - a review of your current uncommitted changes
 - a review of your branch compared to a base branch like `main`
 
-Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/codex-router:adversarial-review`](#codexadversarial-review) when you want to challenge a specific decision or risk area.
+Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/codex-router:adversarial-review`](#codex-routeradversarial-review) when you want to challenge a specific decision or risk area.
 
 Examples:
 
@@ -146,7 +154,7 @@ Examples:
 /codex-router:review --background
 ```
 
-This command is read-only and will not perform any changes. When run in the background you can use [`/codex-router:status`](#codexstatus) to check on the progress and [`/codex-router:cancel`](#codexcancel) to cancel the ongoing task.
+This command is read-only and will not perform any changes. When run in the background you can use [`/codex-router:status`](#codex-routerstatus) to check on the progress and [`/codex-router:cancel`](#codex-routercancel) to cancel the ongoing task.
 
 ### `/codex-router:adversarial-review`
 
@@ -322,7 +330,7 @@ Check out the Codex docs for more [configuration options](https://developers.ope
 
 ### Moving The Work Over To Codex
 
-Delegated tasks and any [stop gate](#what-does-the-review-gate-do) run can also be directly resumed inside Codex by running `codex resume` either with the specific session ID you received from running `/codex-router:result` or `/codex-router:status` or by selecting it from the list.
+Delegated tasks and any [review gate](#enabling-review-gate) run can also be directly resumed inside Codex by running `codex resume` either with the specific session ID you received from running `/codex-router:result` or `/codex-router:status` or by selecting it from the list.
 
 This way you can review the Codex work or continue the work there.
 

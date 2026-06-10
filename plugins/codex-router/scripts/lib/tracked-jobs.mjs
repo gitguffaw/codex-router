@@ -4,9 +4,52 @@ import process from "node:process";
 import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
+export const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
+export const TERMINAL_JOB_STATUSES = new Set([
+  "completed",
+  "completed-with-warnings",
+  "blocked",
+  "failed",
+  "interrupted",
+  "cancelled"
+]);
 
 export function nowIso() {
   return new Date().toISOString();
+}
+
+export function isActiveJobStatus(status) {
+  return ACTIVE_JOB_STATUSES.has(status);
+}
+
+export function isTerminalJobStatus(status) {
+  return TERMINAL_JOB_STATUSES.has(status);
+}
+
+function phaseForJobStatus(status) {
+  switch (status) {
+    case "completed":
+    case "completed-with-warnings":
+      return "done";
+    case "blocked":
+      return "blocked";
+    case "interrupted":
+      return "interrupted";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "failed";
+  }
+}
+
+function normalizeExecutionJobStatus(execution) {
+  if (TERMINAL_JOB_STATUSES.has(execution?.jobStatus)) {
+    return execution.jobStatus;
+  }
+  if (execution?.exitStatus === 0) {
+    return Array.isArray(execution.warnings) && execution.warnings.length > 0 ? "completed-with-warnings" : "completed";
+  }
+  return "failed";
 }
 
 function redactSecrets(value) {
@@ -160,7 +203,8 @@ export async function runTrackedJob(job, runner, options = {}) {
 
   try {
     const execution = await runner();
-    const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
+    const completionStatus = normalizeExecutionJobStatus(execution);
+    const completionPhase = phaseForJobStatus(completionStatus);
     const completedAt = nowIso();
     writeJobFile(job.workspaceRoot, job.id, {
       ...runningRecord,
@@ -168,10 +212,11 @@ export async function runTrackedJob(job, runner, options = {}) {
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
       pid: null,
-      phase: completionStatus === "completed" ? "done" : "failed",
+      phase: completionPhase,
       completedAt,
       result: execution.payload,
-      rendered: execution.rendered
+      rendered: execution.rendered,
+      warnings: execution.warnings ?? []
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
@@ -179,9 +224,13 @@ export async function runTrackedJob(job, runner, options = {}) {
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
       summary: execution.summary,
-      phase: completionStatus === "completed" ? "done" : "failed",
+      phase: completionPhase,
       pid: null,
-      completedAt
+      completedAt,
+      model: execution.model ?? job.model ?? null,
+      effort: execution.effort ?? job.effort ?? null,
+      serviceTier: execution.serviceTier ?? job.serviceTier ?? null,
+      warnings: execution.warnings ?? []
     });
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     return execution;

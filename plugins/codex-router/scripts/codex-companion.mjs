@@ -298,9 +298,12 @@ async function executeReviewRun(request) {
       sourceThreadId: result.sourceThreadId,
       codex: {
         status: result.status,
+        jobStatus: result.jobStatus,
+        turnStatus: result.turnStatus,
         stderr: result.stderr,
         stdout: result.reviewText,
-        reasoning: result.reasoningSummary
+        reasoning: result.reasoningSummary,
+        warnings: result.warnings
       }
     };
     const rendered = renderNativeReviewResult(
@@ -314,6 +317,7 @@ async function executeReviewRun(request) {
 
     return {
       exitStatus: result.status,
+      jobStatus: result.jobStatus,
       threadId: result.threadId,
       turnId: result.turnId,
       payload,
@@ -321,7 +325,11 @@ async function executeReviewRun(request) {
       summary: firstMeaningfulLine(result.reviewText, `${reviewName} completed.`),
       jobTitle: `Codex ${reviewName}`,
       jobClass: "review",
-      targetLabel: target.label
+      targetLabel: target.label,
+      model: request.model ?? null,
+      effort: request.effort ?? null,
+      serviceTier: request.serviceTier ?? null,
+      warnings: result.warnings ?? []
     };
   }
 
@@ -353,9 +361,12 @@ async function executeReviewRun(request) {
     },
     codex: {
       status: result.status,
+      jobStatus: result.jobStatus,
+      turnStatus: result.turnStatus,
       stderr: result.stderr,
       stdout: result.finalMessage,
-      reasoning: result.reasoningSummary
+      reasoning: result.reasoningSummary,
+      warnings: result.warnings
     },
     result: parsed.parsed,
     rawOutput: parsed.rawOutput,
@@ -365,6 +376,7 @@ async function executeReviewRun(request) {
 
   return {
     exitStatus: result.status,
+    jobStatus: result.jobStatus,
     threadId: result.threadId,
     turnId: result.turnId,
     payload,
@@ -376,7 +388,11 @@ async function executeReviewRun(request) {
     summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
     jobTitle: `Codex ${reviewName}`,
     jobClass: "review",
-    targetLabel: context.target.label
+    targetLabel: context.target.label,
+    model: request.model ?? null,
+    effort: request.effort ?? null,
+    serviceTier: request.serviceTier ?? null,
+    warnings: result.warnings ?? []
   };
 }
 
@@ -426,6 +442,8 @@ async function executeTaskRun(request) {
   });
   const payload = {
     status: result.status,
+    jobStatus: result.jobStatus,
+    turnStatus: result.turnStatus,
     threadId: result.threadId,
     mode: request.mode ?? "task",
     workflow: request.workflow ?? null,
@@ -436,11 +454,13 @@ async function executeTaskRun(request) {
     serviceTier: request.serviceTier ?? null,
     rawOutput,
     touchedFiles: result.touchedFiles,
-    reasoningSummary: result.reasoningSummary
+    reasoningSummary: result.reasoningSummary,
+    warnings: result.warnings
   };
 
   return {
     exitStatus: result.status,
+    jobStatus: result.jobStatus,
     threadId: result.threadId,
     turnId: result.turnId,
     payload,
@@ -449,7 +469,11 @@ async function executeTaskRun(request) {
     jobTitle: taskMetadata.title,
     jobClass: "task",
     write: Boolean(request.write),
-    contextPackId: request.contextPack?.id ?? null
+    contextPackId: request.contextPack?.id ?? null,
+    model: request.model ?? null,
+    effort: request.effort ?? null,
+    serviceTier: request.serviceTier ?? null,
+    warnings: result.warnings ?? []
   };
 }
 
@@ -491,7 +515,19 @@ function getJobKindLabel(kind, jobClass) {
   return jobClass === "review" ? "review" : "rescue";
 }
 
-function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false, contextPack = null }) {
+function createCompanionJob({
+  prefix,
+  kind,
+  title,
+  workspaceRoot,
+  jobClass,
+  summary,
+  write = false,
+  contextPack = null,
+  model = null,
+  effort = null,
+  serviceTier = null
+}) {
   return createJobRecord({
     id: generateJobId(prefix),
     kind,
@@ -501,6 +537,9 @@ function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summ
     jobClass,
     summary,
     write,
+    model,
+    effort,
+    serviceTier,
     contextPackId: contextPack?.id ?? null,
     policyHash: contextPack?.policyHash ?? null
   });
@@ -518,7 +557,7 @@ function createTrackedProgress(job, options = {}) {
   };
 }
 
-function buildTaskJob(workspaceRoot, taskMetadata, write) {
+function buildTaskJob(workspaceRoot, taskMetadata, write, model = null, effort = null) {
   return createCompanionJob({
     prefix: "task",
     kind: "task",
@@ -526,7 +565,10 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
     workspaceRoot,
     jobClass: "task",
     summary: taskMetadata.summary,
-    write
+    write,
+    model,
+    effort,
+    serviceTier: null
   });
 }
 
@@ -646,7 +688,10 @@ async function handleReviewCommand(argv, config) {
     workspaceRoot,
     jobClass: "review",
     summary: metadata.summary,
-    contextPack
+    contextPack,
+    model: modelControls.model,
+    effort: modelControls.effort,
+    serviceTier: modelControls.serviceTier
   });
   await runForegroundCommand(
     job,
@@ -656,6 +701,7 @@ async function handleReviewCommand(argv, config) {
         base: options.base,
         scope: options.scope,
         model: modelControls.model,
+        effort: modelControls.effort,
         configOverrides: modelControls.configOverrides,
         serviceTier: modelControls.serviceTier,
         contextPack,
@@ -723,7 +769,10 @@ async function handleRouterTurn(argv, mode) {
     jobClass: "task",
     summary: taskMetadata.summary,
     write: route.write,
-    contextPack
+    contextPack,
+    model: route.model,
+    effort: route.effort,
+    serviceTier: route.serviceTier
   });
   const request = {
     cwd,
@@ -792,7 +841,7 @@ async function handleTask(argv) {
     ensureCodexAvailable(cwd);
     requireTaskRequest(prompt, resumeLast);
 
-    const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+    const job = buildTaskJob(workspaceRoot, taskMetadata, write, model, effort);
     const request = {
       cwd,
       model,
@@ -807,7 +856,7 @@ async function handleTask(argv) {
     return;
   }
 
-  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+  const job = buildTaskJob(workspaceRoot, taskMetadata, write, model, effort);
   await runForegroundCommand(
     job,
     (progress) =>

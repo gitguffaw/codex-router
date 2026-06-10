@@ -1,3 +1,5 @@
+import { isActiveJobStatus } from "./tracked-jobs.mjs";
+
 function severityRank(severity) {
   switch (severity) {
     case "critical":
@@ -112,7 +114,7 @@ function appendActiveJobsTable(lines, jobs) {
   lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const job of jobs) {
     const actions = [`/codex-router:status ${job.id}`];
-    if (job.status === "queued" || job.status === "running") {
+    if (isActiveJobStatus(job.status)) {
       actions.push(`/codex-router:cancel ${job.id}`);
     }
     lines.push(
@@ -145,13 +147,13 @@ function pushJobDetails(lines, job, options = {}) {
   if (job.logFile && options.showLog) {
     lines.push(`  Log: ${job.logFile}`);
   }
-  if ((job.status === "queued" || job.status === "running") && options.showCancelHint) {
+  if (isActiveJobStatus(job.status) && options.showCancelHint) {
     lines.push(`  Cancel: /codex-router:cancel ${job.id}`);
   }
-  if (job.status !== "queued" && job.status !== "running" && options.showResultHint) {
+  if (!isActiveJobStatus(job.status) && options.showResultHint) {
     lines.push(`  Result: /codex-router:result ${job.id}`);
   }
-  if (job.status !== "queued" && job.status !== "running" && job.jobClass === "task" && job.write && options.showReviewHint) {
+  if (!isActiveJobStatus(job.status) && job.jobClass === "task" && job.write && options.showReviewHint) {
     lines.push("  Review changes: /codex-router:review --wait");
     lines.push("  Stricter review: /codex-router:adversarial-review --wait");
   }
@@ -348,7 +350,7 @@ export function renderStatusReport(report) {
     lines.push("Latest finished:");
     pushJobDetails(lines, report.latestFinished, {
       showDuration: true,
-      showLog: report.latestFinished.status === "failed"
+      showLog: ["failed", "blocked", "interrupted"].includes(report.latestFinished.status)
     });
     lines.push("");
   }
@@ -358,7 +360,7 @@ export function renderStatusReport(report) {
     for (const job of report.recent) {
       pushJobDetails(lines, job, {
         showDuration: true,
-        showLog: job.status === "failed"
+        showLog: ["failed", "blocked", "interrupted"].includes(job.status)
       });
     }
     lines.push("");
@@ -377,8 +379,8 @@ export function renderStatusReport(report) {
 export function renderJobStatusReport(job) {
   const lines = ["# Codex Job Status", ""];
   pushJobDetails(lines, job, {
-    showElapsed: job.status === "queued" || job.status === "running",
-    showDuration: job.status !== "queued" && job.status !== "running",
+    showElapsed: isActiveJobStatus(job.status),
+    showDuration: !isActiveJobStatus(job.status),
     showLog: true,
     showCancelHint: true,
     showResultHint: true,

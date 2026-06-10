@@ -425,6 +425,40 @@ rl.on("line", (line) => {
           ? structuredReviewPayload(prompt)
           : taskPayload(prompt, thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state"));
 
+        if (BEHAVIOR === "turn-warning") {
+          send({
+            method: "warning",
+            params: {
+              threadId: thread.id,
+              message: "Model completed with a recoverable warning."
+            }
+          });
+          emitTurnCompleted(thread.id, turnId, [
+            {
+              completed: { type: "agentMessage", id: "msg_" + turnId, text: payload, phase: "final_answer" }
+            }
+          ]);
+          break;
+        }
+
+        if (BEHAVIOR === "turn-interrupted") {
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "interrupted") } });
+          break;
+        }
+
+        if (BEHAVIOR === "turn-blocked") {
+          const error = {
+            message: "Usage limit exceeded. Try again later.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null
+          };
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          send({ method: "error", params: { threadId: thread.id, turnId, error, willRetry: false } });
+          send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "failed", error) } });
+          break;
+        }
+
         if (
           BEHAVIOR === "with-subagent" ||
           BEHAVIOR === "with-late-subagent-message" ||

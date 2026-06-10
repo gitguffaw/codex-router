@@ -1,5 +1,11 @@
 # Changelog
 
-## 1.0.0
+## Initial public release
 
-- Initial version of the Codex plugin for Claude Code
+Codex Router is still in its first public release line. Earlier `1.0.x` metadata was internal release-candidate churn, not separate public releases.
+
+- Add `/codex-router:*` commands for analyze, exec, review, adversarial review, rescue, status, result, cancel, and setup.
+- Route analyze/exec work through Codex app-server turns with policy context packs, model controls, and job tracking.
+- Record model controls and richer lifecycle states on job records.
+- Add optional review gate support and Codex resume handoff details.
+- Preserve OpenAI Apache-2.0 attribution for upstream-derived plugin code.
