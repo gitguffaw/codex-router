@@ -7,14 +7,14 @@
   },
   "metadata": {
     "description": "Codex Router plugin for policy-backed Codex delegation and review.",
-    "version": "1.0.4"
+    "version": "1.0.5"
   },
   "plugins": [
     {
       "name": "codex-router",
       "displayName": "Codex Router",
       "description": "Route Claude Code work through Codex with reliable jobs and explicit policy controls.",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "author": {
         "name": "Compound"
       },

@@ -1,7 +1,7 @@
 {
   "name": "codex-router",
   "displayName": "Codex Router",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Route Claude Code work through Codex with reliable jobs and explicit policy controls.",
   "author": {
     "name": "Compound"
