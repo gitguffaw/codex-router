@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -72,14 +72,15 @@ function printUsage() {
     [
       "Usage:",
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
-      "  node scripts/codex-companion.mjs analyze [--background] [--search] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
-      "  node scripts/codex-companion.mjs exec [--background] [--search] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
-      "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs analyze [--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+      "  node scripts/codex-companion.mjs exec [--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+      "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>]",
+      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus text]",
+      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
-      "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
+      "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
+      "  node scripts/codex-companion.mjs cli <codex args...>"
     ].join("\n")
   );
 }
@@ -107,6 +108,35 @@ function normalizeArgv(argv) {
   return argv;
 }
 
+function handleCliCommand(argv) {
+  const tokens = normalizeArgv(argv);
+  if (tokens.length === 0) {
+    throw new Error("Provide Codex CLI arguments, for example: /codex-router:cli features list");
+  }
+
+  const result = spawnSync("codex", tokens, {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: "utf8",
+    input: readStdinIfPiped() || undefined,
+    shell: process.platform === "win32",
+    windowsHide: true
+  });
+
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+  if (result.error) {
+    process.stderr.write(`${result.error.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.exitCode = result.status ?? 1;
+}
+
 function parseCommandInput(argv, config = {}) {
   return parseArgs(normalizeArgv(argv), {
     ...config,
@@ -123,6 +153,21 @@ function resolveCommandCwd(options = {}) {
 
 function resolveCommandWorkspace(options = {}) {
   return resolveWorkspaceRoot(resolveCommandCwd(options));
+}
+
+function asArray(value) {
+  if (value == null) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+function collectConfigArgs(options = {}) {
+  return [
+    ...asArray(options.config),
+    ...asArray(options.enable).map((feature) => `features.${feature}=true`),
+    ...asArray(options.disable).map((feature) => `features.${feature}=false`)
+  ].filter((value) => String(value ?? "").trim());
 }
 
 function shorten(text, limit = 96) {
@@ -286,6 +331,7 @@ async function executeReviewRun(request) {
       target: reviewTarget,
       model: request.model,
       configOverrides: request.configOverrides,
+      configArgs: request.configArgs,
       onProgress: request.onProgress
     });
     const payload = {
@@ -335,11 +381,12 @@ async function executeReviewRun(request) {
 
   const context = collectReviewContext(request.cwd, target);
   const prompt = buildAdversarialReviewPrompt(context, focusText);
-    const result = await runAppServerTurn(context.repoRoot, {
+  const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
     sandbox: "read-only",
     configOverrides: request.configOverrides,
+    configArgs: request.configArgs,
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
   });
@@ -429,6 +476,7 @@ async function executeTaskRun(request) {
     effort: request.effort,
     sandbox: request.write ? "workspace-write" : "read-only",
     configOverrides: request.configOverrides,
+    configArgs: request.configArgs,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -452,6 +500,7 @@ async function executeTaskRun(request) {
     model: request.model ?? null,
     effort: request.effort ?? null,
     serviceTier: request.serviceTier ?? null,
+    configArgs: request.configArgs ?? [],
     rawOutput,
     touchedFiles: result.touchedFiles,
     reasoningSummary: result.reasoningSummary,
@@ -644,9 +693,11 @@ function enqueueBackgroundTask(cwd, job, request) {
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["base", "scope", "model", "cwd", "effort"],
+    arrayOptions: ["config", "enable", "disable"],
     booleanOptions: ["json", "background", "wait", "best", "fast", "spark"],
     aliasMap: {
-      m: "model"
+      m: "model",
+      c: "config"
     }
   });
 
@@ -660,6 +711,7 @@ async function handleReviewCommand(argv, config) {
     fast: Boolean(options.fast),
     spark: Boolean(options.spark)
   }, { cwd });
+  const configArgs = collectConfigArgs(options);
   const target = resolveReviewTarget(cwd, {
     base: options.base,
     scope: options.scope
@@ -676,7 +728,8 @@ async function handleReviewCommand(argv, config) {
       target: target.label,
       model: modelControls.model,
       effort: modelControls.effort,
-      serviceTier: modelControls.serviceTier
+      serviceTier: modelControls.serviceTier,
+      configArgs
     },
     nonGoals: ["Do not edit files from review mode."]
   });
@@ -703,6 +756,7 @@ async function handleReviewCommand(argv, config) {
         model: modelControls.model,
         effort: modelControls.effort,
         configOverrides: modelControls.configOverrides,
+        configArgs,
         serviceTier: modelControls.serviceTier,
         contextPack,
         focusText,
@@ -716,9 +770,11 @@ async function handleReviewCommand(argv, config) {
 async function handleRouterTurn(argv, mode) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", "tool"],
+    arrayOptions: ["config", "enable", "disable"],
     booleanOptions: ["json", "background", "search", "docs", "parallel", "best", "fast", "spark", "resume-last", "resume", "fresh"],
     aliasMap: {
-      m: "model"
+      m: "model",
+      c: "config"
     }
   });
 
@@ -736,6 +792,7 @@ async function handleRouterTurn(argv, mode) {
     fast: Boolean(options.fast),
     spark: Boolean(options.spark)
   }, { cwd });
+  const configArgs = collectConfigArgs(options);
   const route = buildRouterRequest({
     mode,
     prompt,
@@ -753,7 +810,8 @@ async function handleRouterTurn(argv, mode) {
       sandbox: route.sandbox,
       model: route.model,
       effort: route.effort,
-      serviceTier: route.serviceTier
+      serviceTier: route.serviceTier,
+      configArgs
     },
     nonGoals: route.write ? ["Do not perform unrelated refactors."] : ["Do not edit files from analyze mode."]
   });
@@ -787,6 +845,7 @@ async function handleRouterTurn(argv, mode) {
     modifiers: route.modifiers,
     serviceTier: route.serviceTier,
     configOverrides: route.configOverrides,
+    configArgs,
     contextPack,
     taskMetadata
   };
@@ -814,9 +873,11 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    arrayOptions: ["config", "enable", "disable"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
-      m: "model"
+      m: "model",
+      c: "config"
     }
   });
 
@@ -824,6 +885,7 @@ async function handleTask(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = normalizeModelControl(options.model);
   const effort = normalizeEffortControl(options.effort);
+  const configArgs = collectConfigArgs(options);
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
@@ -849,7 +911,8 @@ async function handleTask(argv) {
       prompt,
       write,
       resumeLast,
-      jobId: job.id
+      jobId: job.id,
+      configArgs
     };
     const { payload } = enqueueBackgroundTask(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
@@ -868,6 +931,7 @@ async function handleTask(argv) {
         write,
         resumeLast,
         jobId: job.id,
+        configArgs,
         onProgress: progress
       }),
     { json: options.json }
@@ -961,6 +1025,9 @@ async function main() {
       break;
     case "cancel":
       await handleCancelCommand(argv);
+      break;
+    case "cli":
+      handleCliCommand(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

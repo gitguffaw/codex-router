@@ -187,7 +187,7 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   }
 
   async initialize() {
-    const args = ["app-server", ...buildConfigArgs(this.options.configOverrides)];
+    const args = ["app-server", ...buildConfigArgs(this.options.configOverrides, this.options.configArgs)];
     this.proc = spawn("codex", args, {
       cwd: this.cwd,
       env: this.options.env ?? process.env,
@@ -273,13 +273,18 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   }
 }
 
-function buildConfigArgs(configOverrides = {}) {
-  return Object.entries(configOverrides ?? {}).flatMap(([key, value]) => {
+function buildConfigArgs(configOverrides = {}, configArgs = []) {
+  const rawArgs = (Array.isArray(configArgs) ? configArgs : []).flatMap((value) => {
+    const normalized = String(value ?? "").trim();
+    return normalized ? ["-c", normalized] : [];
+  });
+  const overrideArgs = Object.entries(configOverrides ?? {}).flatMap(([key, value]) => {
     if (value == null || value === "") {
       return [];
     }
     return ["-c", `${key}=${JSON.stringify(String(value))}`];
   });
+  return [...rawArgs, ...overrideArgs];
 }
 
 class BrokerCodexAppServerClient extends AppServerClientBase {

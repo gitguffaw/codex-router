@@ -1,6 +1,6 @@
 ---
 description: Run a policy-backed read-only Codex analysis job
-argument-hint: '[--background] [--search] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]'
+argument-hint: '[--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
@@ -14,6 +14,8 @@ Core constraints:
 - This command is read-only.
 - Do not edit files, apply patches, or fix issues yourself.
 - The companion runtime records the selected policy, mode, modifiers, and model controls in a context pack.
+- `--search`, `--docs`, `--tool`, and `--parallel` are Codex-side routing directives. Preserve them exactly; the companion runtime turns them into explicit inner-Codex instructions.
+- `-c`/`--config`, `--enable`, and `--disable` are Codex config controls. Preserve them exactly.
 
 Run:
 

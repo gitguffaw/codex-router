@@ -334,19 +334,87 @@ test("exec --background enqueues a write-capable router job with exec metadata",
   assert.match(fakeState.lastTurnStart.prompt, /<completion_contract>/);
 });
 
-test("unsupported V1 routing modifiers fail before silent downgrade", () => {
+test("Codex-native routing modifiers reach the app-server prompt", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "analyze", "--json", "--docs", "--tool", "mcp:playwright", "--parallel", "inspect current docs"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(payload.modifiers, ["docsMcp", "tool:mcp:playwright", "parallel"]);
+
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.match(state.lastTurnStart.prompt, /<docs_mcp>/);
+  assert.match(state.lastTurnStart.prompt, /openaiDeveloperDocs/);
+  assert.match(state.lastTurnStart.prompt, /<tool_directive>/);
+  assert.match(state.lastTurnStart.prompt, /mcp:playwright/);
+  assert.match(state.lastTurnStart.prompt, /<parallel_work>/);
+});
+
+test("router commands pass Codex config controls to app-server startup", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run(
+    "node",
+    [
+      SCRIPT,
+      "analyze",
+      "--json",
+      "-c",
+      'model_verbosity="high"',
+      "--enable",
+      "multi_agent",
+      "--disable",
+      "memories",
+      "inspect config passthrough"
+    ],
+    {
+      cwd: repo,
+      env: buildEnv(binDir)
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(payload.configArgs, ['model_verbosity="high"', "features.multi_agent=true", "features.memories=false"]);
+
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.deepEqual(state.appServerArgs, [
+    "app-server",
+    "-c",
+    'model_verbosity="high"',
+    "-c",
+    "features.multi_agent=true",
+    "-c",
+    "features.memories=false"
+  ]);
+});
+
+test("cli subcommand passes raw arguments to the local Codex binary", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
   initGitRepo(repo);
 
-  const result = run("node", [SCRIPT, "analyze", "--docs", "inspect current docs"], {
+  const result = run("node", [SCRIPT, "cli", "features list"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /DocsMCP.*not enabled yet/);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /multi_agent stable true/);
+  assert.match(result.stdout, /plugins stable true/);
 });
 
 test("task runs without auth preflight so Codex can refresh an expired session", () => {

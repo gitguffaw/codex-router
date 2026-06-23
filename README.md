@@ -11,6 +11,7 @@ Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` comm
 - `/codex-router:review` for a normal read-only Codex review
 - `/codex-router:adversarial-review` for a steerable challenge review
 - `/codex-router:rescue`, `/codex-router:status`, `/codex-router:result`, and `/codex-router:cancel` to delegate work and manage background jobs
+- `/codex-router:cli` as a raw Codex CLI escape hatch for features that are not first-class router commands
 
 ## Requirements
 
@@ -111,6 +112,9 @@ Examples:
 ```bash
 /codex-router:analyze --best --effort xhigh --fast inspect the caching design
 /codex-router:analyze --search compare this repository against the latest upstream docs
+/codex-router:analyze --docs inspect the current React docs and compare them to this implementation
+/codex-router:analyze --tool mcp:playwright inspect the running app behavior
+/codex-router:analyze --parallel compare the main architecture options
 ```
 
 `--search` is a prompt-level routing hint. Codex Router adds web-search instructions to the Codex prompt, but it does not run web search itself and does not pass a dedicated search flag through the Codex app server. Treat search-dependent output as best effort and ask Codex for sources when current external facts matter.
@@ -124,13 +128,30 @@ Examples:
 ```bash
 /codex-router:exec --best --effort xhigh --fast fix the failing cache test
 /codex-router:exec --background implement the smallest safe fix
+/codex-router:exec --tool mcp:playwright fix the UI bug after inspecting the app
+/codex-router:exec --docs update this integration against the current upstream SDK docs
 ```
 
-### Unsupported V1 Modifiers
+### Codex-Native Modifiers
 
-Codex Router V1 parses `--docs`, `--tool`, and `--parallel`, but intentionally fails with a clear error instead of silently downgrading them.
+Codex Router keeps `--search`, `--docs`, `--tool <capability>`, and `--parallel` open as Codex-side routing directives.
 
-`--parallel` is reserved for future lane orchestration, where one request could be split across multiple coordinated Codex roles and then merged. It is disabled in V1 because parallel write ownership, cancellation, result merging, and conflict handling need stricter guarantees than the current single-job router provides.
+These modifiers are passed into the Codex prompt with explicit instructions. They do not cause Claude to substitute its own web, docs, MCP, plugin, or subagent tools.
+
+- `--search` asks inner Codex to use web search when current external facts matter.
+- `--docs` asks inner Codex to use docs tooling such as `openaiDeveloperDocs` or configured docs MCPs.
+- `--tool <capability>` names a specific inner Codex capability, such as `mcp:playwright`, `mcp:context7`, `bundled_tool:computer-use`, or `plugin_or_skill:<name>`.
+- `--parallel` asks Codex to use subagents or multiple internal lanes when useful, then return one merged answer or implementation summary.
+
+For Codex capabilities that are not naturally analyze/exec/review/rescue jobs, use [`/codex-router:cli`](#codex-routercli).
+
+First-class Codex jobs also accept repeatable Codex config controls:
+
+```bash
+/codex-router:exec -c 'model_verbosity="high"' --enable multi_agent --disable memories fix the bug
+```
+
+Those values are passed to `codex app-server` as `-c <key=value>` before the run starts. High-level router flags such as `--effort` and `--fast` still work and intentionally win if they set the same config key.
 
 ### `/codex-router:review`
 
@@ -259,6 +280,23 @@ Examples:
 /codex-router:cancel
 /codex-router:cancel task-abc123
 ```
+
+### `/codex-router:cli`
+
+Runs an arbitrary Codex CLI command through the local `codex` binary.
+
+Use this as the escape hatch for Codex surfaces that do not have a first-class router command yet:
+
+```bash
+/codex-router:cli features list
+/codex-router:cli mcp list
+/codex-router:cli plugin list
+/codex-router:cli doctor
+/codex-router:cli cloud status <task-id>
+/codex-router:cli resume <session-id>
+```
+
+For normal delegated work, prefer `/codex-router:analyze`, `/codex-router:exec`, `/codex-router:review`, `/codex-router:adversarial-review`, or `/codex-router:rescue` because those commands preserve job tracking, cancellation, context packs, and result rendering.
 
 ### `/codex-router:setup`
 

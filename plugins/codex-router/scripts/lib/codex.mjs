@@ -678,9 +678,11 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
 async function withAppServer(cwd, fn, options = {}) {
   let client = null;
   try {
+    const hasConfigArgs = (options.configArgs ?? []).length > 0;
     client = await CodexAppServerClient.connect(cwd, {
       configOverrides: options.configOverrides,
-      disableBroker: Object.keys(options.configOverrides ?? {}).length > 0
+      configArgs: options.configArgs,
+      disableBroker: Object.keys(options.configOverrides ?? {}).length > 0 || hasConfigArgs
     });
     const result = await fn(client);
     await client.close();
@@ -702,7 +704,8 @@ async function withAppServer(cwd, fn, options = {}) {
 
     const directClient = await CodexAppServerClient.connect(cwd, {
       disableBroker: true,
-      configOverrides: options.configOverrides
+      configOverrides: options.configOverrides,
+      configArgs: options.configArgs
     });
     try {
       return await fn(directClient);
@@ -1039,7 +1042,7 @@ export async function runAppServerReview(cwd, options = {}) {
       error: turnState.error,
       stderr: cleanCodexStderr(client.stderr)
     };
-  }, { configOverrides: options.configOverrides });
+  }, { configOverrides: options.configOverrides, configArgs: options.configArgs });
 }
 
 export async function runAppServerTurn(cwd, options = {}) {
@@ -1109,7 +1112,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions
     };
-  }, { configOverrides: options.configOverrides });
+  }, { configOverrides: options.configOverrides, configArgs: options.configArgs });
 }
 
 export async function findLatestTaskThread(cwd) {

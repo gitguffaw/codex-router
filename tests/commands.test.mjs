@@ -22,6 +22,9 @@ test("review command uses AskUserQuestion and background Bash while staying revi
   assert.match(source, /```typescript/);
   assert.match(source, /review "\$ARGUMENTS"/);
   assert.match(source, /\[--scope auto\|working-tree\|branch\]/);
+  assert.match(source, /--config <key=value>/);
+  assert.match(source, /--enable <feature>/);
+  assert.match(source, /--disable <feature>/);
   assert.match(source, /run_in_background:\s*true/);
   assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" review "\$ARGUMENTS"`/);
   assert.match(source, /description:\s*"Codex review"/);
@@ -50,6 +53,9 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /```typescript/);
   assert.match(source, /adversarial-review "\$ARGUMENTS"/);
   assert.match(source, /\[--scope auto\|working-tree\|branch\].*\[focus \.\.\.\]/);
+  assert.match(source, /--config <key=value>/);
+  assert.match(source, /--enable <feature>/);
+  assert.match(source, /--disable <feature>/);
   assert.match(source, /run_in_background:\s*true/);
   assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" adversarial-review "\$ARGUMENTS"`/);
   assert.match(source, /description:\s*"Codex adversarial review"/);
@@ -76,6 +82,7 @@ test("continue is not exposed as a user-facing command", () => {
     "adversarial-review.md",
     "analyze.md",
     "cancel.md",
+    "cli.md",
     "exec.md",
     "rescue.md",
     "result.md",
@@ -92,9 +99,38 @@ test("analyze and exec commands route through codex-router runtime", () => {
   assert.match(analyze, /codex-companion\.mjs" analyze "\$ARGUMENTS"/);
   assert.match(analyze, /read-only/i);
   assert.match(analyze, /context pack/i);
+  assert.match(analyze, /--docs/);
+  assert.match(analyze, /--tool <capability>/);
+  assert.match(analyze, /--parallel/);
+  assert.match(analyze, /--config <key=value>/);
+  assert.match(analyze, /--enable <feature>/);
+  assert.match(analyze, /--disable <feature>/);
+  assert.match(analyze, /Codex-side routing directives/i);
   assert.match(exec, /codex-companion\.mjs" exec "\$ARGUMENTS"/);
   assert.match(exec, /only V1 command that intentionally starts write-capable Codex work/i);
   assert.match(exec, /context pack/i);
+  assert.match(exec, /--docs/);
+  assert.match(exec, /--tool <capability>/);
+  assert.match(exec, /--parallel/);
+  assert.match(exec, /--config <key=value>/);
+  assert.match(exec, /--enable <feature>/);
+  assert.match(exec, /--disable <feature>/);
+  assert.match(exec, /Codex-side routing directives/i);
+});
+
+test("cli command exposes raw Codex CLI escape hatch", () => {
+  const source = read("commands/cli.md");
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+
+  assert.match(source, /disable-model-invocation:\s*true/);
+  assert.match(source, /codex-companion\.mjs" cli "\$ARGUMENTS"/);
+  assert.match(source, /features list/);
+  assert.match(source, /mcp list/);
+  assert.match(source, /plugin list/);
+  assert.match(source, /Return stdout and stderr verbatim/i);
+  assert.match(readme, /### `\/codex-router:cli`/);
+  assert.match(readme, /\/codex-router:cli features list/);
+  assert.match(readme, /raw Codex CLI escape hatch/i);
 });
 
 test("rescue command absorbs continue semantics", () => {
@@ -118,6 +154,9 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /--resume\|--fresh/);
   assert.match(rescue, /--model <model\|spark>/);
   assert.match(rescue, /--effort <none\|minimal\|low\|medium\|high\|xhigh>/);
+  assert.match(rescue, /--config <key=value>/);
+  assert.match(rescue, /--enable <feature>/);
+  assert.match(rescue, /--disable <feature>/);
   assert.match(rescue, /task-resume-candidate --json/);
   assert.match(rescue, /AskUserQuestion/);
   assert.match(rescue, /Continue current Codex thread/);
@@ -126,6 +165,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /default to foreground/i);
   assert.match(rescue, /Do not forward them to `task`/i);
   assert.match(rescue, /`--model` and `--effort` are runtime-selection flags/i);
+  assert.match(rescue, /Codex config controls/i);
   assert.match(rescue, /Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort/i);
   assert.match(rescue, /If they ask for `spark`, map it to `gpt-5\.3-codex-spark`/i);
   assert.match(rescue, /If the request includes `--resume`, do not ask whether to continue/i);
@@ -149,6 +189,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(agent, /Leave model unset by default/i);
   assert.match(agent, /If the user asks for `spark`, map that to `--model gpt-5\.3-codex-spark`/i);
   assert.match(agent, /If the user asks for a concrete model name such as `gpt-5\.4-mini`, pass it through with `--model`/i);
+  assert.match(agent, /Codex config controls/i);
   assert.match(agent, /Return the stdout of the `codex-companion` command exactly as-is/i);
   assert.match(agent, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
   assert.match(agent, /gpt-5-4-prompting/);
@@ -162,6 +203,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /Leave model unset by default/i);
   assert.match(runtimeSkill, /Map `spark` to `--model gpt-5\.3-codex-spark`/i);
   assert.match(runtimeSkill, /If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only/i);
+  assert.match(runtimeSkill, /If the forwarded request includes `-c`\/`--config`, `--enable`, or `--disable`, pass those controls through to `task`/i);
   assert.match(runtimeSkill, /Strip it before calling `task`/i);
   assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);

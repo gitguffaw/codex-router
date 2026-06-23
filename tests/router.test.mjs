@@ -38,17 +38,34 @@ test("router rejects empty prompts and unsupported modes", () => {
   assert.throws(() => buildRouterRequest({ mode: "parallel", prompt: "x", options: {} }), /Unsupported router mode/);
 });
 
-test("docs, tool, and parallel guardrails fail explicitly", () => {
-  assert.throws(
-    () => buildRouterRequest({ mode: "analyze", prompt: "x", options: { docs: true } }),
-    /DocsMCP.*not enabled yet/
-  );
-  assert.throws(
-    () => buildRouterRequest({ mode: "analyze", prompt: "x", options: { tool: "mcp:playwright" } }),
-    /ToolDirective.*not enabled yet/
-  );
-  assert.throws(
-    () => buildRouterRequest({ mode: "exec", prompt: "x", options: { parallel: true } }),
-    /Parallel.*not enabled yet/
-  );
+test("docs, tool, and parallel modifiers are prompt-directed Codex capabilities", () => {
+  const route = buildRouterRequest({
+    mode: "analyze",
+    prompt: "inspect the app",
+    options: {
+      docs: true,
+      tool: "mcp:playwright",
+      parallel: true
+    }
+  });
+
+  assert.deepEqual(route.modifiers, ["docsMcp", "tool:mcp:playwright", "parallel"]);
+  assert.match(route.prompt, /<docs_mcp>/);
+  assert.match(route.prompt, /openaiDeveloperDocs/);
+  assert.match(route.prompt, /<tool_directive>/);
+  assert.match(route.prompt, /mcp:playwright/);
+  assert.match(route.prompt, /<parallel_work>/);
+});
+
+test("exec parallel modifier preserves write mode and merge guidance", () => {
+  const route = buildRouterRequest({
+    mode: "exec",
+    prompt: "fix the UI bug",
+    options: { parallel: true }
+  });
+
+  assert.equal(route.sandbox, "workspace-write");
+  assert.equal(route.write, true);
+  assert.deepEqual(route.modifiers, ["parallel"]);
+  assert.match(route.prompt, /write ownership coordinated/);
 });

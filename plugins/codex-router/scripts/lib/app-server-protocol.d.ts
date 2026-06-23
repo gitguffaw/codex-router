@@ -52,6 +52,7 @@ export interface CodexAppServerClientOptions {
   brokerEndpoint?: string;
   disableBroker?: boolean;
   reuseExistingBroker?: boolean;
+  configArgs?: string[];
 }
 
 export interface AppServerMethodMap {

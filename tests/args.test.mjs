@@ -30,6 +30,19 @@ test("parseArgs supports inline values, aliases, booleans, and passthrough promp
   assert.deepEqual(parsed.positionals, ["--not-a-flag"]);
 });
 
+test("parseArgs accumulates repeatable array options", () => {
+  const parsed = parseArgs(["--config", 'service_tier="fast"', "-c", 'model="gpt-5.5"', "--enable=multi_agent"], {
+    arrayOptions: ["config", "enable"],
+    aliasMap: { c: "config" }
+  });
+
+  assert.deepEqual(parsed.options, {
+    config: ['service_tier="fast"', 'model="gpt-5.5"'],
+    enable: ["multi_agent"]
+  });
+  assert.deepEqual(parsed.positionals, []);
+});
+
 test("parseArgs preserves unknown flags as positional prompt text", () => {
   const parsed = parseArgs(["--future-flag", "explain", "-x"], {
     valueOptions: ["model"],

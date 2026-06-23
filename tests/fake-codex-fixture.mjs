@@ -286,8 +286,24 @@ if (args[0] === "login" && args[1] === "status") {
 if (args[0] === "login") {
   process.exit(0);
 }
+if (args[0] === "features" && args[1] === "list") {
+  console.log("multi_agent stable true");
+  console.log("plugins stable true");
+  process.exit(0);
+}
+if (args[0] === "mcp" && args[1] === "list") {
+  console.log("context7 enabled");
+  console.log("playwright enabled");
+  process.exit(0);
+}
+if (args[0] === "plugin" && args[1] === "list") {
+  console.log("github@openai-curated enabled");
+  console.log("linear@openai-curated enabled");
+  process.exit(0);
+}
 if (args[0] !== "app-server") {
-  process.exit(1);
+  console.log("fake codex " + args.join(" "));
+  process.exit(0);
 }
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;

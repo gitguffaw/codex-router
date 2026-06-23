@@ -19,8 +19,54 @@ function requirePrompt(prompt) {
   }
 }
 
-function unsupportedModifier(name, futureMode) {
-  throw new Error(`${name} is parsed by codex-router V1 but is not enabled yet. Required future mode: ${futureMode}.`);
+function modifierValue(modifiers, prefix) {
+  const modifier = modifiers.find((entry) => entry.startsWith(prefix));
+  return modifier ? modifier.slice(prefix.length).trim() : "";
+}
+
+function appendModifierInstructions(parts, modifiers, mode) {
+  if (modifiers.includes("webSearch")) {
+    parts.push(
+      "",
+      "<web_search>",
+      mode === "exec"
+        ? "Use Codex web search only where current external facts materially affect the implementation."
+        : "Use Codex web search for current external facts, then tie the findings back to this repository.",
+      "</web_search>"
+    );
+  }
+
+  if (modifiers.includes("docsMcp")) {
+    parts.push(
+      "",
+      "<docs_mcp>",
+      "Use inner Codex docs tooling for docs/spec retrieval when available. Prefer openaiDeveloperDocs for OpenAI/Codex topics, official OpenAI docs via web search when needed, and configured docs MCPs such as context7 for third-party libraries.",
+      "State which docs source you used and tie the result back to this repository.",
+      "</docs_mcp>"
+    );
+  }
+
+  const toolDirective = modifierValue(modifiers, "tool:");
+  if (toolDirective) {
+    parts.push(
+      "",
+      "<tool_directive>",
+      `Use the requested inner Codex capability: ${toolDirective}.`,
+      "First verify the capability is available in the Codex session. If it is unavailable, say that explicitly instead of substituting Claude's outer tools.",
+      "</tool_directive>"
+    );
+  }
+
+  if (modifiers.includes("parallel")) {
+    parts.push(
+      "",
+      "<parallel_work>",
+      mode === "exec"
+        ? "Use Codex subagents or multiple internal lanes when they materially improve the result. Keep write ownership coordinated, avoid conflicting edits, and merge into one final implementation summary."
+        : "Use Codex subagents or multiple internal lanes when they materially improve coverage. Split the work, reconcile disagreements, and return one consolidated answer.",
+      "</parallel_work>"
+    );
+  }
 }
 
 function buildAnalyzePrompt(prompt, modifiers) {
@@ -33,9 +79,7 @@ function buildAnalyzePrompt(prompt, modifiers) {
     "Return observed facts, inferences, tradeoffs, recommendation, and next action. Keep claims grounded in repository context or tool output.",
     "</structured_output_contract>"
   ];
-  if (modifiers.includes("webSearch")) {
-    parts.push("", "<web_search>", "Use Codex web search for current external facts, then tie the findings back to this repository.", "</web_search>");
-  }
+  appendModifierInstructions(parts, modifiers, "analyze");
   return parts.join("\n");
 }
 
@@ -53,9 +97,7 @@ function buildExecPrompt(prompt, modifiers) {
     "Keep changes tightly scoped. Avoid unrelated refactors. Preserve user changes.",
     "</action_safety>"
   ];
-  if (modifiers.includes("webSearch")) {
-    parts.push("", "<web_search>", "Use Codex web search only where current external facts materially affect the implementation.", "</web_search>");
-  }
+  appendModifierInstructions(parts, modifiers, "exec");
   return parts.join("\n");
 }
 
@@ -70,13 +112,16 @@ export function buildRouterRequest({ mode, prompt, options = {}, modelControls =
     modifiers.push("webSearch");
   }
   if (options.docs) {
-    unsupportedModifier("DocsMCP", "DocsMCP interactive/app-server routing");
+    modifiers.push("docsMcp");
   }
   if (options.tool) {
-    unsupportedModifier("ToolDirective", "ToolDirective interactive/app-server routing");
+    const toolDirective = String(options.tool).trim();
+    if (toolDirective) {
+      modifiers.push(`tool:${toolDirective}`);
+    }
   }
   if (options.parallel) {
-    unsupportedModifier("Parallel", "Parallel role/lane orchestration");
+    modifiers.push("parallel");
   }
 
   requirePrompt(prompt);
