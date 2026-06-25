@@ -1,6 +1,6 @@
 {
   "name": "@compound/codex-router-plugin-cc",
-  "version": "1.0.5",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "Route Claude Code work through Codex with policy-backed modes, model resolution, and reliable job handling.",

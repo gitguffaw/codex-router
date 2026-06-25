@@ -1,8 +1,8 @@
 # Changelog
 
-## Initial public release
+## 2.0.0
 
-Codex Router is still in its first public release line. Earlier `1.0.x` metadata was internal release-candidate churn, not separate public releases.
+Codex Router's first public release line starts at `2.0.0`. Earlier `1.0.x` metadata was internal release-candidate churn, not separate public releases.
 
 - Add `/codex-router:*` commands for analyze, exec, review, adversarial review, rescue, status, result, cancel, and setup.
 - Route analyze/exec work through Codex app-server turns with policy context packs, model controls, and job tracking.

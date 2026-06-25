@@ -9,10 +9,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 test("Antigravity bundle exposes codex-router skill metadata", () => {
   const manifestPath = path.join(ROOT, ".agy", "plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
   assert.deepEqual(manifest, {
     name: "codex-router",
-    version: "1.0.5"
+    version: packageJson.version
   });
 
   const skillsLink = path.join(ROOT, ".agy", "skills");
