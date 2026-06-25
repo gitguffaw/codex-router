@@ -33,3 +33,19 @@ test("Antigravity bundle exposes codex-router skill metadata", () => {
   assert.match(skill, /cancel/);
   assert.match(skill, /Do not turn a failed or incomplete Codex run into an Antigravity-side implementation attempt/i);
 });
+
+test("Antigravity documentation covers install, uninstall, and runtime boundaries", () => {
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+  const skill = fs.readFileSync(path.join(ROOT, "skills", "codex-router", "SKILL.md"), "utf8");
+
+  assert.match(readme, /## Install In Antigravity \(`agy`\)/);
+  assert.match(readme, /agy plugin install \.\/\.agy/);
+  assert.match(readme, /agy plugin uninstall codex-router/);
+  assert.match(readme, /## Antigravity Quick Start/);
+  assert.match(readme, /CODEX_ROUTER_ROOT/);
+  assert.match(readme, /does not register a separate MCP server/i);
+
+  assert.match(skill, /CODEX_ROUTER_ROOT/);
+  assert.match(skill, /Do not run the raw `codex` CLI/i);
+  assert.match(skill, /Do not turn a failed or incomplete Codex run into an Antigravity-side implementation attempt/i);
+});

@@ -110,6 +110,12 @@ Run a setup check before delegating work:
 node "$CODEX_ROUTER_ROOT/plugins/codex-router/scripts/codex-companion.mjs" setup
 ```
 
+To uninstall the AGY bundle:
+
+```bash
+agy plugin uninstall codex-router
+```
+
 The AGY bundle does not register a separate MCP server. It teaches AGY to call the existing Codex Router runtime, which already uses the local Codex CLI and app-server integration.
 
 ## Antigravity Quick Start
