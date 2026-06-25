@@ -1,8 +1,8 @@
-# Codex Router for Claude Code
+# Codex Router
 
-Use Codex from inside Claude Code with policy-backed routing, model selection, code reviews, and delegated tasks.
+Use Codex from Claude Code or Antigravity (`agy`) with policy-backed routing, model selection, code reviews, and delegated tasks.
 
-Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
+Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace for Claude Code and ships an AGY skill bundle for Antigravity. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
 ## What You Get
 
@@ -12,15 +12,17 @@ Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` comm
 - `/codex-router:adversarial-review` for a steerable challenge review
 - `/codex-router:rescue`, `/codex-router:status`, `/codex-router:result`, and `/codex-router:cancel` to delegate work and manage background jobs
 - `/codex-router:cli` as a raw Codex CLI escape hatch for features that are not first-class router commands
+- an Antigravity `codex-router` skill that calls the same companion runtime
 
 ## Requirements
 
 - **ChatGPT subscription (incl. Free) or OpenAI API key.**
   - Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
 - **Node.js 18.18 or later**
-- **Claude Code with plugin support**
+- **Claude Code with plugin support** for the Claude Code plugin surface
+- **Antigravity CLI (`agy`)** for the AGY skill bundle
 
-## Install
+## Install In Claude Code
 
 In Claude Code, add this repository as a plugin marketplace:
 
@@ -78,9 +80,9 @@ Then, inside Claude Code:
 /codex-router:setup
 ```
 
-### Antigravity CLI (`agy`)
+## Install In Antigravity (`agy`)
 
-Codex Router also ships an Antigravity plugin bundle for users who want AGY to delegate work to Codex through the same companion runtime.
+Codex Router ships an Antigravity plugin bundle for users who want AGY to delegate work to Codex through the same companion runtime.
 
 Clone the repo, then install the AGY bundle from the checkout:
 
@@ -110,9 +112,23 @@ node "$CODEX_ROUTER_ROOT/plugins/codex-router/scripts/codex-companion.mjs" setup
 
 The AGY bundle does not register a separate MCP server. It teaches AGY to call the existing Codex Router runtime, which already uses the local Codex CLI and app-server integration.
 
-## Quick Start
+## Antigravity Quick Start
 
-After install, you should see:
+After installing the AGY bundle, open AGY in the project you want Codex to inspect and ask it to use the `codex-router` skill.
+
+Example prompts:
+
+```text
+Use codex-router to review this repository with Codex.
+Use codex-router to ask Codex to investigate the failing test.
+Use codex-router to run a read-only Codex analysis of the cache design.
+```
+
+For work outside the `codex-router` checkout, keep `CODEX_ROUTER_ROOT` set so the skill can find the companion runtime.
+
+## Claude Code Quick Start
+
+After installing in Claude Code, you should see:
 
 - the slash commands listed below
 - the `codex-router:codex-rescue` subagent in `/agents`

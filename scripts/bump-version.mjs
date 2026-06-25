@@ -66,6 +66,13 @@ const TARGETS = [
     file: ".claude-plugin/marketplace.json",
     values: [
       {
+        label: "version",
+        get: (json) => json.version,
+        set: (json, version) => {
+          json.version = version;
+        }
+      },
+      {
         label: "metadata.version",
         get: (json) => json.metadata?.version,
         set: (json, version) => {

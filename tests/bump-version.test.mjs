@@ -45,6 +45,7 @@ function makeVersionFixture() {
     version: "1.0.2"
   });
   writeJson(path.join(root, ".claude-plugin", "marketplace.json"), {
+    version: "1.0.2",
     metadata: {
       version: "1.0.2"
     },
@@ -72,6 +73,7 @@ test("bump-version updates every release manifest", () => {
   assert.equal(readJson(path.join(root, "package-lock.json")).packages[""].version, "1.2.3");
   assert.equal(readJson(path.join(root, "plugins", "codex-router", ".claude-plugin", "plugin.json")).version, "1.2.3");
   assert.equal(readJson(path.join(root, ".agy", "plugin.json")).version, "1.2.3");
+  assert.equal(readJson(path.join(root, ".claude-plugin", "marketplace.json")).version, "1.2.3");
   assert.equal(readJson(path.join(root, ".claude-plugin", "marketplace.json")).metadata.version, "1.2.3");
   assert.equal(readJson(path.join(root, ".claude-plugin", "marketplace.json")).plugins[0].version, "1.2.3");
 });
@@ -90,5 +92,6 @@ test("bump-version check mode reports stale metadata", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /plugins\/codex-router\/\.claude-plugin\/plugin\.json version/);
   assert.match(result.stderr, /\.agy\/plugin\.json version/);
+  assert.match(result.stderr, /\.claude-plugin\/marketplace\.json version/);
   assert.match(result.stderr, /\.claude-plugin\/marketplace\.json metadata\.version/);
 });
