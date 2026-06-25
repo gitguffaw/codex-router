@@ -8,4 +8,5 @@ Codex Router is still in its first public release line. Earlier `1.0.x` metadata
 - Route analyze/exec work through Codex app-server turns with policy context packs, model controls, and job tracking.
 - Record model controls and richer lifecycle states on job records.
 - Add optional review gate support and Codex resume handoff details.
+- Add an Antigravity (`agy`) plugin bundle that exposes a `codex-router` skill for the existing companion runtime.
 - Preserve OpenAI Apache-2.0 attribution for upstream-derived plugin code.

@@ -51,6 +51,18 @@ const TARGETS = [
     ]
   },
   {
+    file: ".agy/plugin.json",
+    values: [
+      {
+        label: "version",
+        get: (json) => json.version,
+        set: (json, version) => {
+          json.version = version;
+        }
+      }
+    ]
+  },
+  {
     file: ".claude-plugin/marketplace.json",
     values: [
       {

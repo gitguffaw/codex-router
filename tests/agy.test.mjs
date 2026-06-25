@@ -1,0 +1,34 @@
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("Antigravity bundle exposes codex-router skill metadata", () => {
+  const manifestPath = path.join(ROOT, ".agy", "plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+
+  assert.deepEqual(manifest, {
+    name: "codex-router",
+    version: "1.0.5"
+  });
+
+  const skillsLink = path.join(ROOT, ".agy", "skills");
+  const linkStats = fs.lstatSync(skillsLink);
+  assert.equal(linkStats.isSymbolicLink(), true);
+  assert.equal(fs.readlinkSync(skillsLink), "../skills");
+
+  const skillPath = path.join(ROOT, "skills", "codex-router", "SKILL.md");
+  const skill = fs.readFileSync(skillPath, "utf8");
+  assert.match(skill, /^name: codex-router$/m);
+  assert.match(skill, /codex-companion\.mjs/);
+  assert.match(skill, /Do not run the raw `codex` CLI/i);
+  assert.match(skill, /CODEX_ROUTER_ROOT/);
+  assert.match(skill, /setup/);
+  assert.match(skill, /status/);
+  assert.match(skill, /result/);
+  assert.match(skill, /cancel/);
+  assert.match(skill, /Do not turn a failed or incomplete Codex run into an Antigravity-side implementation attempt/i);
+});

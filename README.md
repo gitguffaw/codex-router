@@ -78,6 +78,38 @@ Then, inside Claude Code:
 /codex-router:setup
 ```
 
+### Antigravity CLI (`agy`)
+
+Codex Router also ships an Antigravity plugin bundle for users who want AGY to delegate work to Codex through the same companion runtime.
+
+Clone the repo, then install the AGY bundle from the checkout:
+
+```bash
+git clone https://github.com/gitguffaw/codex-router.git
+cd codex-router
+agy plugin install ./.agy
+```
+
+The AGY bundle exposes a `codex-router` skill. That skill routes through:
+
+```bash
+node <codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs
+```
+
+When using the skill from a different project directory, set `CODEX_ROUTER_ROOT` to the cloned `codex-router` checkout so AGY can find the companion runtime:
+
+```bash
+export CODEX_ROUTER_ROOT=/path/to/codex-router
+```
+
+Run a setup check before delegating work:
+
+```bash
+node "$CODEX_ROUTER_ROOT/plugins/codex-router/scripts/codex-companion.mjs" setup
+```
+
+The AGY bundle does not register a separate MCP server. It teaches AGY to call the existing Codex Router runtime, which already uses the local Codex CLI and app-server integration.
+
 ## Quick Start
 
 After install, you should see:
