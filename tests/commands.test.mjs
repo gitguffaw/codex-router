@@ -84,6 +84,7 @@ test("continue is not exposed as a user-facing command", () => {
     "cancel.md",
     "cli.md",
     "exec.md",
+    "models.md",
     "rescue.md",
     "result.md",
     "review.md",
@@ -131,6 +132,24 @@ test("cli command exposes raw Codex CLI escape hatch", () => {
   assert.match(readme, /### `\/codex-router:cli`/);
   assert.match(readme, /\/codex-router:cli features list/);
   assert.match(readme, /raw Codex CLI escape hatch/i);
+});
+
+test("models command exposes the live Codex model catalog", () => {
+  const source = read("commands/models.md");
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+
+  assert.match(source, /disable-model-invocation:\s*true/);
+  assert.match(source, /codex-companion\.mjs" models "\$ARGUMENTS"/);
+  assert.match(source, /\[--all\] \[--json\]/);
+  assert.match(source, /effective default model/i);
+  assert.match(source, /supported effort levels/i);
+  assert.match(source, /hidden catalog entries/i);
+  assert.match(source, /`fast` service tier/);
+  assert.match(source, /aliases such as `spark`/i);
+  assert.match(source, /Do not summarize or condense it/i);
+  assert.match(readme, /### `\/codex-router:models`/);
+  assert.match(readme, /\/codex-router:models --json/);
+  assert.match(readme, /`--all` includes hidden catalog entries/i);
 });
 
 test("rescue command absorbs continue semantics", () => {
@@ -210,7 +229,8 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
   assert.match(readme, /`codex-router:codex-rescue` subagent/i);
   assert.match(readme, /if you do not pass `--model` or `--effort`, Codex chooses its own defaults/i);
-  assert.match(readme, /--model gpt-5\.4-mini --effort medium/i);
+  assert.match(readme, /--best --effort medium/i);
+  assert.doesNotMatch(readme, /gpt-5\.4-mini/);
   assert.match(readme, /`spark`, the plugin maps that to `gpt-5\.3-codex-spark`/i);
   assert.match(readme, /continue a previous Codex task/i);
   assert.match(readme, /### `\/codex-router:setup`/);
@@ -268,8 +288,14 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);
   assert.match(setup, /codex-companion\.mjs" setup --json \$ARGUMENTS/);
+  assert.match(setup, /stale or unsupported.*\/codex-router:models/i);
   assert.match(readme, /!codex login/);
-  assert.match(readme, /offer to install Codex for you/i);
+  assert.match(readme, /install or upgrade Codex for you/i);
+  assert.match(readme, /!codex login --device-auth/);
+  assert.match(readme, /!codex login --with-api-key/);
+  assert.match(readme, /## What's New In 2\.1\.0/);
+  assert.match(readme, /One host surface, depending on how you want to use Codex Router/i);
+  assert.match(readme, /If you are upgrading an existing Claude Code install/i);
   assert.match(readme, /\/codex-router:setup --enable-review-gate/);
   assert.match(readme, /\/codex-router:setup --disable-review-gate/);
 });

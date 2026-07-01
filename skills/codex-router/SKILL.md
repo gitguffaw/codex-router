@@ -32,7 +32,28 @@ node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" 
 
 If setup reports that Codex is missing or unauthenticated, stop and ask the user to follow the reported setup step. Do not invent alternate authentication flows.
 
+If the user needs to see which Codex models and reasoning levels are currently selectable, or setup warns about a stale model pin, inspect the live model catalog:
+
+```bash
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" models
+```
+
 ## Command Mapping
+
+For live model and effort discovery:
+
+```bash
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" models
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" models --all
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" models --json
+```
+
+Use `models` when:
+
+- the user asks which Codex models are currently available
+- the user wants to know which effort levels or `fast` tier options exist
+- the user wants to confirm what `spark` resolves to
+- setup warns that a configured default model pin is stale or unsupported
 
 For read-only analysis:
 
@@ -83,9 +104,20 @@ Preserve user-supplied runtime controls and pass them through to the companion c
 
 Map `spark` to the companion runtime unchanged; it normalizes the model alias.
 
+If the user asks to choose a model or effort but has not named one, run `models` first instead of guessing from stale docs or memory.
+
 ## Output Handling
 
-Return Codex Router output as-is when it is a review, result, status table, setup report, or failure message. Do not turn a failed or incomplete Codex run into an Antigravity-side implementation attempt.
+Return Codex Router output as-is when it is a review, result, status table, or models report. Do not turn a failed or incomplete Codex run into an Antigravity-side implementation attempt.
+
+For setup reports or setup/auth failure messages, preserve the substance of the output but translate Claude Code-specific follow-up commands into AGY-safe equivalents before showing them to the user. In particular:
+
+- translate `/codex-router:models` to `node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" models`
+- translate `/codex-router:setup --enable-review-gate` and `/codex-router:setup --disable-review-gate` to the matching `node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" setup ...` commands
+- translate `!codex login` to `codex login`
+- preserve any `codex login --device-auth` or `codex login --with-api-key` guidance when browser login is blocked
+
+Do not invent new remediation steps beyond those translations.
 
 If Codex Router reports review findings, present findings first and do not automatically fix them. Ask the user which findings, if any, they want addressed.
 

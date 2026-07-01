@@ -187,6 +187,7 @@ export function renderSetupReport(report) {
     `- npm: ${report.npm.detail}`,
     `- codex: ${report.codex.detail}`,
     `- auth: ${report.auth.detail}`,
+    `- model: ${report.model.detail}`,
     `- session runtime: ${report.sessionRuntime.label}`,
     `- review gate: ${report.reviewGateEnabled ? "enabled" : "disabled"}`,
     ""
@@ -202,6 +203,91 @@ export function renderSetupReport(report) {
 
   if (report.nextSteps.length > 0) {
     lines.push("Next steps:");
+    for (const step of report.nextSteps) {
+      lines.push(`- ${step}`);
+    }
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function formatModelNotes(model, report) {
+  const notes = [];
+  if (model.recommended) {
+    notes.push("recommended");
+  }
+  if (model.effectiveDefault) {
+    notes.push("effective default");
+  }
+  if (model.configuredDefault && report.defaultModel.source !== "fallback") {
+    notes.push("configured default");
+  }
+  if (model.defaultEffort) {
+    notes.push(`default effort: ${model.defaultEffort}`);
+  }
+  if (model.aliases.length > 0) {
+    notes.push(`aliases: ${model.aliases.join(", ")}`);
+  }
+  if (report.includeHidden && model.visibility && model.visibility !== "list") {
+    notes.push(`visibility: ${model.visibility}`);
+  }
+  return notes.join("; ");
+}
+
+function formatDefaultModelSource(source) {
+  switch (source) {
+    case "configured":
+      return "configured";
+    case "fallback":
+      return "fallback from stale configured default";
+    case "configured-unverified":
+      return "configured (not verified against live catalog)";
+    case "recommended":
+      return "recommended";
+    default:
+      return "unknown";
+  }
+}
+
+export function renderModelsReport(report) {
+  const lines = [
+    "# Codex Models",
+    "",
+    "Session:",
+    `- auth: ${report.auth.detail}`,
+    ...(report.auth.provider ? [`- provider: ${report.auth.provider}`] : []),
+    `- catalog: ${report.catalog.visible} visible / ${report.catalog.total} total`,
+    `- default: ${report.defaultModel.effectiveModel ?? "unknown"} (${formatDefaultModelSource(report.defaultModel.source)})`,
+    `- recommended: ${report.defaultModel.recommendedModel ?? "unknown"}`,
+    ""
+  ];
+
+  if (report.warnings.length > 0) {
+    lines.push("Warnings:");
+    for (const warning of report.warnings) {
+      lines.push(`- ${warning}`);
+    }
+    lines.push("");
+  }
+
+  if (report.models.length === 0) {
+    lines.push("No models were returned by `codex debug models`.");
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  lines.push("Available models:");
+  lines.push("| Model | Efforts | Fast | Notes |");
+  lines.push("| --- | --- | --- | --- |");
+  for (const model of report.models) {
+    lines.push(
+      `| ${escapeMarkdownCell(model.slug ?? "")} | ${escapeMarkdownCell(model.efforts.join(", "))} | ${escapeMarkdownCell(
+        model.supportsFastTier ? "yes" : "no"
+      )} | ${escapeMarkdownCell(formatModelNotes(model, report))} |`
+    );
+  }
+
+  if (report.nextSteps.length > 0) {
+    lines.push("", "Next steps:");
     for (const step of report.nextSteps) {
       lines.push(`- ${step}`);
     }

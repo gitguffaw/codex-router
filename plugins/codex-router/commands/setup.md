@@ -35,3 +35,4 @@ Output rules:
 - Present the final setup output to the user.
 - If installation was skipped, present the original setup output.
 - If Codex is installed but not authenticated, preserve the guidance to run `!codex login`.
+- If setup warns that the configured default model pin is stale or unsupported for the current ChatGPT-backed session, preserve the guidance to run `/codex-router:models`.

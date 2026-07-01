@@ -29,11 +29,12 @@ async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
 }
 
 test("setup reports ready when fake codex is installed and authenticated", () => {
+  const workspace = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
 
   const result = run("node", [SCRIPT, "setup", "--json"], {
-    cwd: ROOT,
+    cwd: workspace,
     env: buildEnv(binDir)
   });
 
@@ -41,16 +42,17 @@ test("setup reports ready when fake codex is installed and authenticated", () =>
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ready, true);
   assert.match(payload.codex.detail, /advanced runtime available/);
-  assert.equal(payload.sessionRuntime.mode, "direct");
+  assert.equal(payload.sessionRuntime.mode, "shared");
 });
 
 test("setup is ready without npm when Codex is already installed and authenticated", () => {
+  const workspace = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
   fs.symlinkSync(process.execPath, path.join(binDir, "node"));
 
   const result = run("node", [SCRIPT, "setup", "--json"], {
-    cwd: ROOT,
+    cwd: workspace,
     env: {
       ...process.env,
       PATH: binDir
@@ -66,11 +68,12 @@ test("setup is ready without npm when Codex is already installed and authenticat
 });
 
 test("setup trusts app-server API key auth even when login status alone would fail", () => {
+  const workspace = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "api-key-account-only");
 
   const result = run("node", [SCRIPT, "setup", "--json"], {
-    cwd: ROOT,
+    cwd: workspace,
     env: buildEnv(binDir)
   });
 
@@ -84,11 +87,12 @@ test("setup trusts app-server API key auth even when login status alone would fa
 });
 
 test("setup is ready when the active provider does not require OpenAI login", () => {
+  const workspace = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "provider-no-auth");
 
   const result = run("node", [SCRIPT, "setup", "--json"], {
-    cwd: ROOT,
+    cwd: workspace,
     env: buildEnv(binDir)
   });
 
@@ -102,11 +106,12 @@ test("setup is ready when the active provider does not require OpenAI login", ()
 });
 
 test("setup treats custom providers with app-server-ready config as ready", () => {
+  const workspace = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "env-key-provider");
 
   const result = run("node", [SCRIPT, "setup", "--json"], {
-    cwd: ROOT,
+    cwd: workspace,
     env: buildEnv(binDir)
   });
 
@@ -120,11 +125,12 @@ test("setup treats custom providers with app-server-ready config as ready", () =
 });
 
 test("setup reports not ready when app-server config read fails", () => {
+  const workspace = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "config-read-fails");
 
   const result = run("node", [SCRIPT, "setup", "--json"], {
-    cwd: ROOT,
+    cwd: workspace,
     env: buildEnv(binDir)
   });
 
@@ -134,6 +140,25 @@ test("setup reports not ready when app-server config read fails", () => {
   assert.equal(payload.auth.loggedIn, false);
   assert.equal(payload.auth.source, "app-server");
   assert.match(payload.auth.detail, /config\/read failed for cwd/);
+});
+
+test("setup reports stale chatgpt model pins before the first run", () => {
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "unsupported-config-model");
+
+  const result = run("node", [SCRIPT, "setup", "--json"], {
+    cwd: ROOT,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.model.configuredModel, "gpt-5.4");
+  assert.equal(payload.model.supported, false);
+  assert.equal(payload.model.fallbackModel, "gpt-5.5");
+  assert.match(payload.model.detail, /not in the live catalog/i);
+  assert.match(payload.nextSteps.join("\n"), /model = "gpt-5.5"/);
 });
 
 test("review renders a no-findings result from app-server review/start", () => {
@@ -173,6 +198,43 @@ test("task runs when the active provider does not require OpenAI login", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Handled the requested task/);
+});
+
+test("task falls back to the live chatgpt default when the configured model pin is stale", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "unsupported-config-model");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "--json", "check stale model fallback"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.model, "gpt-5.5");
+
+  const state = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
+  assert.equal(state.lastTurnStart.model, "gpt-5.5");
+});
+
+test("task rejects an explicit unavailable model before launch", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "task", "--model", "missing-model", "check invalid explicit model"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /missing-model.*not available/i);
 });
 
 test("analyze runs read-only with context-pack metadata", () => {
@@ -415,6 +477,58 @@ test("cli subcommand passes raw arguments to the local Codex binary", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /multi_agent stable true/);
   assert.match(result.stdout, /plugins stable true/);
+});
+
+test("models reports the live visible Codex catalog and effective default", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "unsupported-config-model");
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "models", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.includeHidden, false);
+  assert.deepEqual(payload.catalog, {
+    source: "codex debug models",
+    includeHidden: false,
+    total: 4,
+    visible: 3,
+    hidden: 1
+  });
+  assert.equal(payload.defaultModel.configuredModel, "gpt-5.4");
+  assert.equal(payload.defaultModel.effectiveModel, "gpt-5.5");
+  assert.equal(payload.defaultModel.source, "fallback");
+  assert.deepEqual(
+    payload.models.map((model) => model.slug),
+    ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+  );
+  assert.deepEqual(payload.models[0].efforts, ["low", "medium", "high", "xhigh"]);
+  assert.equal(payload.models[0].supportsFastTier, true);
+  assert.deepEqual(payload.models[2].aliases, ["spark"]);
+  assert.match(payload.nextSteps.join("\n"), /remove the model pin/i);
+});
+
+test("models --all includes hidden catalog entries", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "models", "--all", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.includeHidden, true);
+  assert.equal(payload.models[0].slug, "hidden-model");
+  assert.equal(payload.models[0].visibility, "hidden");
 });
 
 test("task runs without auth preflight so Codex can refresh an expired session", () => {
@@ -972,7 +1086,7 @@ test("job lifecycle records interrupted Codex turns as interrupted", () => {
   assert.equal(routerState.jobs[0].phase, "interrupted");
 });
 
-test("task forwards explicit model names without catalog resolution", () => {
+test("task forwards explicit available model names after normalization", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   const statePath = path.join(binDir, "fake-codex-state.json");
@@ -982,14 +1096,14 @@ test("task forwards explicit model names without catalog resolution", () => {
   run("git", ["add", "README.md"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
-  const result = run("node", [SCRIPT, "task", "--model", " custom-model ", "diagnose the failing test"], {
+  const result = run("node", [SCRIPT, "task", "--model", " gpt-5.4-mini ", "diagnose the failing test"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
 
   assert.equal(result.status, 0, result.stderr);
   const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.equal(fakeState.lastTurnStart.model, "custom-model");
+  assert.equal(fakeState.lastTurnStart.model, "gpt-5.4-mini");
 });
 
 test("task logs reasoning summaries and assistant messages to the job log", () => {
@@ -2446,22 +2560,36 @@ test("status reports shared session runtime when a lazy broker is active", () =>
 test("setup and status honor --cwd when reading shared session runtime", () => {
   const targetWorkspace = makeTempDir();
   const invocationWorkspace = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(targetWorkspace);
+  fs.writeFileSync(path.join(targetWorkspace, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: targetWorkspace });
+  run("git", ["commit", "-m", "init"], { cwd: targetWorkspace });
+  fs.writeFileSync(path.join(targetWorkspace, "README.md"), "hello again\n");
 
-  saveBrokerSession(targetWorkspace, {
-    endpoint: "unix:/tmp/fake-broker.sock"
+  const review = run("node", [SCRIPT, "review"], {
+    cwd: targetWorkspace,
+    env: buildEnv(binDir)
   });
+  assert.equal(review.status, 0, review.stderr);
+
+  const session = loadBrokerSession(targetWorkspace);
+  assert.ok(session?.endpoint);
 
   const status = run("node", [SCRIPT, "status", "--cwd", targetWorkspace], {
-    cwd: invocationWorkspace
+    cwd: invocationWorkspace,
+    env: buildEnv(binDir)
   });
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /Session runtime: shared session/);
 
   const setup = run("node", [SCRIPT, "setup", "--cwd", targetWorkspace, "--json"], {
-    cwd: invocationWorkspace
+    cwd: invocationWorkspace,
+    env: buildEnv(binDir)
   });
   assert.equal(setup.status, 0, setup.stderr);
   const payload = JSON.parse(setup.stdout);
   assert.equal(payload.sessionRuntime.mode, "shared");
-  assert.equal(payload.sessionRuntime.endpoint, "unix:/tmp/fake-broker.sock");
+  assert.equal(payload.sessionRuntime.endpoint, session.endpoint);
 });

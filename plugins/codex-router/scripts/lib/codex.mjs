@@ -38,6 +38,7 @@
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
+import { readModelCatalog } from "./model-resolution.mjs";
 import { binaryAvailable } from "./process.mjs";
 
 const SERVICE_NAME = "claude_code_codex_router_plugin";
@@ -778,6 +779,27 @@ function buildAuthStatus(fields = {}) {
   };
 }
 
+function configuredModelFromConfig(configResponse) {
+  const model = typeof configResponse?.config?.model === "string" ? configResponse.config.model.trim() : "";
+  return model || null;
+}
+
+function visibleCatalogModels(catalog) {
+  return catalog
+    .filter((model) => model?.visibility === "list" && typeof model.slug === "string")
+    .sort(sortCatalogModelsByPriority);
+}
+
+function catalogHasModel(catalog, slug) {
+  return catalog.some((model) => model?.slug === slug);
+}
+
+function sortCatalogModelsByPriority(left, right) {
+  const leftPriority = Number.isFinite(left?.priority) ? left.priority : Number.MAX_SAFE_INTEGER;
+  const rightPriority = Number.isFinite(right?.priority) ? right.priority : Number.MAX_SAFE_INTEGER;
+  return leftPriority - rightPriority || String(left?.slug ?? "").localeCompare(String(right?.slug ?? ""));
+}
+
 function resolveProviderConfig(configResponse) {
   const config = configResponse?.config;
   if (!config || typeof config !== "object") {
@@ -850,6 +872,56 @@ function buildAppServerAuthStatus(accountResponse, configResponse) {
     requiresOpenaiAuth,
     provider: providerId
   });
+}
+
+function buildDefaultModelStatus(fields = {}) {
+  return {
+    available: true,
+    configuredModel: null,
+    supported: null,
+    detail: "No model information available.",
+    recommendedModel: null,
+    fallbackModel: null,
+    authMethod: null,
+    provider: null,
+    requiresOpenaiAuth: null,
+    ...fields
+  };
+}
+
+function listReasoningEfforts(model) {
+  const efforts = [];
+  for (const entry of model?.supported_reasoning_levels ?? []) {
+    const effort = typeof entry?.effort === "string" ? entry.effort.trim() : "";
+    if (effort && !efforts.includes(effort)) {
+      efforts.push(effort);
+    }
+  }
+  return efforts;
+}
+
+function modelSupportsFastTier(model) {
+  return (model?.additional_speed_tiers ?? []).includes("fast");
+}
+
+function normalizeCatalogModelForOutput(model, context = {}) {
+  const slug = typeof model?.slug === "string" ? model.slug : null;
+  const defaultEffort = typeof model?.default_reasoning_level === "string" ? model.default_reasoning_level : null;
+  const aliases = slug === "gpt-5.3-codex-spark" ? ["spark"] : [];
+
+  return {
+    slug,
+    displayName: typeof model?.display_name === "string" ? model.display_name : null,
+    visibility: typeof model?.visibility === "string" ? model.visibility : null,
+    priority: Number.isFinite(model?.priority) ? model.priority : null,
+    efforts: listReasoningEfforts(model),
+    defaultEffort,
+    supportsFastTier: modelSupportsFastTier(model),
+    aliases,
+    recommended: slug === context.recommendedModel,
+    configuredDefault: slug === context.configuredModel,
+    effectiveDefault: slug === context.effectiveModel
+  };
 }
 
 async function getCodexAuthStatusFromClient(client, cwd) {
@@ -928,7 +1000,7 @@ export async function getCodexAuthStatus(cwd, options = {}) {
   try {
     client = await CodexAppServerClient.connect(cwd, {
       env: options.env,
-      reuseExistingBroker: true
+      reuseExistingBroker: false
     });
     return await getCodexAuthStatusFromClient(client, cwd);
   } catch (error) {
@@ -942,6 +1014,187 @@ export async function getCodexAuthStatus(cwd, options = {}) {
       await client.close().catch(() => {});
     }
   }
+}
+
+export async function getCodexDefaultModelStatus(cwd, options = {}) {
+  const availability = getCodexAvailability(cwd);
+  if (!availability.available) {
+    return buildDefaultModelStatus({
+      available: false,
+      detail: availability.detail
+    });
+  }
+
+  let client = null;
+  let authStatus = buildAuthStatus();
+  let configResponse = null;
+  try {
+    client = await CodexAppServerClient.connect(cwd, {
+      env: options.env,
+      reuseExistingBroker: false
+    });
+    const accountResponse = await client.request("account/read", { refreshToken: false });
+    configResponse = await client.request("config/read", {
+      includeLayers: false,
+      cwd
+    });
+    authStatus = buildAppServerAuthStatus(accountResponse, configResponse);
+  } catch (error) {
+    return buildDefaultModelStatus({
+      available: false,
+      detail: error instanceof Error ? error.message : String(error)
+    });
+  } finally {
+    if (client) {
+      await client.close().catch(() => {});
+    }
+  }
+
+  const configuredModel = configuredModelFromConfig(configResponse);
+  let catalog = [];
+  try {
+    catalog = readModelCatalog(cwd, { env: options.env });
+  } catch (error) {
+    const catalogError = error instanceof Error ? error.message : String(error);
+    return buildDefaultModelStatus({
+      configuredModel,
+      authMethod: authStatus.authMethod,
+      provider: authStatus.provider,
+      requiresOpenaiAuth: authStatus.requiresOpenaiAuth,
+      detail: configuredModel
+        ? `Configured default model ${configuredModel}. Unable to verify it against the live catalog: ${catalogError}`
+        : `No default model pinned. Unable to verify the live catalog: ${catalogError}`
+    });
+  }
+
+  const recommendedModel = visibleCatalogModels(catalog)[0]?.slug ?? null;
+  if (!configuredModel) {
+    return buildDefaultModelStatus({
+      configuredModel: null,
+      supported: true,
+      detail: recommendedModel
+        ? `No default model pinned. Codex will use its current recommended default (${recommendedModel}).`
+        : "No default model pinned. Codex will use its current recommended default.",
+      recommendedModel,
+      authMethod: authStatus.authMethod,
+      provider: authStatus.provider,
+      requiresOpenaiAuth: authStatus.requiresOpenaiAuth
+    });
+  }
+
+  if (catalogHasModel(catalog, configuredModel)) {
+    return buildDefaultModelStatus({
+      configuredModel,
+      supported: true,
+      detail: `Configured default model ${configuredModel} is available in the live catalog.`,
+      recommendedModel,
+      authMethod: authStatus.authMethod,
+      provider: authStatus.provider,
+      requiresOpenaiAuth: authStatus.requiresOpenaiAuth
+    });
+  }
+
+  const chatgptAuth = authStatus.authMethod === "chatgpt";
+  const fallbackModel = chatgptAuth ? recommendedModel : null;
+  return buildDefaultModelStatus({
+    configuredModel,
+    supported: chatgptAuth ? false : null,
+    detail:
+      chatgptAuth && fallbackModel
+        ? `Configured default model ${configuredModel} is not in the live catalog for this ChatGPT-authenticated Codex session. Use ${fallbackModel} or remove the model pin.`
+        : chatgptAuth
+          ? `Configured default model ${configuredModel} is not in the live catalog for this ChatGPT-authenticated Codex session.`
+          : `Configured default model ${configuredModel} is not in the live catalog, but this session is not ChatGPT-authenticated so the router will not override it automatically.`,
+    recommendedModel,
+    fallbackModel,
+    authMethod: authStatus.authMethod,
+    provider: authStatus.provider,
+    requiresOpenaiAuth: authStatus.requiresOpenaiAuth
+  });
+}
+
+export async function getCodexModelsReport(cwd, options = {}) {
+  const availability = getCodexAvailability(cwd);
+  if (!availability.available) {
+    throw new Error(availability.detail);
+  }
+
+  const authStatus = await getCodexAuthStatus(cwd, options);
+  const defaultModelStatus = await getCodexDefaultModelStatus(cwd, options);
+  const catalog = readModelCatalog(cwd, { env: options.env });
+  const visibleModels = visibleCatalogModels(catalog);
+  const recommendedModel = visibleModels[0]?.slug ?? null;
+  const configuredModel = defaultModelStatus.configuredModel ?? null;
+  let effectiveModel = null;
+  let source = "unknown";
+
+  if (defaultModelStatus.supported === false && defaultModelStatus.fallbackModel) {
+    effectiveModel = defaultModelStatus.fallbackModel;
+    source = "fallback";
+  } else if (configuredModel && defaultModelStatus.supported === true) {
+    effectiveModel = configuredModel;
+    source = "configured";
+  } else if (configuredModel && defaultModelStatus.supported == null) {
+    effectiveModel = configuredModel;
+    source = "configured-unverified";
+  } else if (recommendedModel) {
+    effectiveModel = recommendedModel;
+    source = "recommended";
+  }
+
+  const includeHidden = Boolean(options.includeHidden);
+  const modelRows = catalog
+    .filter((model) => includeHidden || model?.visibility === "list")
+    .sort(sortCatalogModelsByPriority)
+    .map((model) =>
+      normalizeCatalogModelForOutput(model, {
+        recommendedModel,
+        configuredModel,
+        effectiveModel
+      })
+    );
+
+  const warnings = [];
+  if (defaultModelStatus.supported === false || defaultModelStatus.supported == null) {
+    warnings.push(defaultModelStatus.detail);
+  }
+  const nextSteps = [];
+  if (defaultModelStatus.supported === false) {
+    nextSteps.push(
+      recommendedModel
+        ? `Update the active Codex model pin to "${recommendedModel}", or remove the model pin so Codex can use the live default.`
+        : "Remove the active Codex model pin so Codex can use the live default."
+    );
+  }
+
+  return {
+    catalog: {
+      source: "codex debug models",
+      includeHidden,
+      total: catalog.length,
+      visible: catalog.filter((model) => model?.visibility === "list").length,
+      hidden: catalog.filter((model) => model?.visibility !== "list").length
+    },
+    auth: {
+      detail: authStatus.detail,
+      authMethod: authStatus.authMethod,
+      provider: authStatus.provider,
+      requiresOpenaiAuth: authStatus.requiresOpenaiAuth
+    },
+    defaultModel: {
+      configuredModel,
+      recommendedModel,
+      effectiveModel,
+      source,
+      supported: defaultModelStatus.supported,
+      fallbackModel: defaultModelStatus.fallbackModel ?? null,
+      detail: defaultModelStatus.detail
+    },
+    includeHidden,
+    models: modelRows,
+    warnings,
+    nextSteps
+  };
 }
 
 export async function interruptAppServerTurn(cwd, { threadId, turnId }) {

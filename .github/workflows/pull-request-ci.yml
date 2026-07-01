@@ -31,5 +31,8 @@ jobs:
       - name: Run test suite
         run: npm test
 
+      - name: Check release metadata versions
+        run: npm run check-version
+
       - name: Run build
         run: npm run build

@@ -89,6 +89,14 @@ function buildConfigReadResult() {
         config: { model_provider: "ollama" },
         origins: {}
       };
+    case "unsupported-config-model":
+      return {
+        config: {
+          model_provider: "openai",
+          model: "gpt-5.4"
+        },
+        origins: {}
+      };
     case "env-key-provider":
       return {
         config: {
@@ -241,6 +249,8 @@ if (args[0] === "debug" && args[1] === "models") {
     models: [
       {
         slug: "gpt-5.5",
+        display_name: "GPT-5.5",
+        default_reasoning_level: "medium",
         visibility: "list",
         priority: 0,
         supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }],
@@ -248,6 +258,8 @@ if (args[0] === "debug" && args[1] === "models") {
       },
       {
         slug: "gpt-5.4-mini",
+        display_name: "GPT-5.4 mini",
+        default_reasoning_level: "medium",
         visibility: "list",
         priority: 5,
         supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }],
@@ -255,6 +267,8 @@ if (args[0] === "debug" && args[1] === "models") {
       },
       {
         slug: "gpt-5.3-codex-spark",
+        display_name: "GPT-5.3 Codex Spark",
+        default_reasoning_level: "high",
         visibility: "list",
         priority: 10,
         supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }],
@@ -262,6 +276,8 @@ if (args[0] === "debug" && args[1] === "models") {
       },
       {
         slug: "hidden-model",
+        display_name: "Hidden Model",
+        default_reasoning_level: "xhigh",
         visibility: "hidden",
         priority: -1,
         supported_reasoning_levels: [{ effort: "xhigh" }],
@@ -436,6 +452,22 @@ rl.on("line", (line) => {
 	        };
 	        saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
+
+        if (BEHAVIOR === "unsupported-config-model" && message.params.model == null) {
+          const error = {
+            message: "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.",
+            codexErrorInfo: {
+              invalidRequest: true
+            },
+            additionalDetails: {
+              type: "invalid_request_error"
+            }
+          };
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          send({ method: "error", params: { threadId: thread.id, turnId, error, willRetry: false } });
+          send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "failed", error) } });
+          break;
+        }
 
         const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
           ? structuredReviewPayload(prompt)

@@ -4,23 +4,35 @@ Use Codex from Claude Code or Antigravity (`agy`) with policy-backed routing, mo
 
 Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace for Claude Code and ships an AGY skill bundle for Antigravity. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
+## What's New In 2.1.0
+
+- `/codex-router:models` exposes the live Codex model catalog, supported effort levels, `fast` tier support, aliases such as `spark`, and the effective default model for the current machine.
+- `/codex-router:setup` now surfaces stale ChatGPT-backed model pins and points users to `models` instead of leaving model recovery implicit.
+- Default-inheriting runs can fall back to the live recommended ChatGPT default when a configured default model pin is stale, while explicit unavailable model ids fail early.
+- The Antigravity (`agy`) skill now documents the same `setup -> models -> delegated run` workflow as the Claude Code surface.
+
+See [CHANGELOG.md](./CHANGELOG.md) for public release history.
+
 ## What You Get
 
 - `/codex-router:analyze` for policy-backed read-only Codex analysis
 - `/codex-router:exec` for policy-backed write-capable Codex execution
 - `/codex-router:review` for a normal read-only Codex review
 - `/codex-router:adversarial-review` for a steerable challenge review
+- `/codex-router:models` for the live Codex model catalog, effort support, and effective default
 - `/codex-router:rescue`, `/codex-router:status`, `/codex-router:result`, and `/codex-router:cancel` to delegate work and manage background jobs
 - `/codex-router:cli` as a raw Codex CLI escape hatch for features that are not first-class router commands
 - an Antigravity `codex-router` skill that calls the same companion runtime
 
 ## Requirements
 
-- **ChatGPT subscription (incl. Free) or OpenAI API key.**
-  - Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
+- **A Codex-ready auth or provider setup.**
+  - Most users use a ChatGPT subscription (incl. Free) or an OpenAI API key. Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
+  - If your local Codex config points at a provider that does not require OpenAI authentication, Codex Router uses that same provider configuration instead of forcing ChatGPT or API-key login.
 - **Node.js 18.18 or later**
-- **Claude Code with plugin support** for the Claude Code plugin surface
-- **Antigravity CLI (`agy`)** for the AGY skill bundle
+- **One host surface, depending on how you want to use Codex Router**
+  - **Claude Code with plugin support** for the slash-command plugin surface
+  - **Antigravity CLI (`agy`)** for the AGY skill bundle
 
 ## Install In Claude Code
 
@@ -48,7 +60,13 @@ Check your local Codex setup:
 /codex-router:setup
 ```
 
-`/codex-router:setup` will tell you whether Codex is ready. If Codex is missing and npm is available, it can offer to install Codex for you.
+`/codex-router:setup` will tell you whether Codex is ready. It checks both that the local `codex` binary exists and that the installed Codex runtime has the app-server support this plugin requires. If Codex is missing and npm is available, it can offer to install or upgrade Codex for you.
+
+Inspect the live model catalog and available reasoning levels:
+
+```bash
+/codex-router:models
+```
 
 If you prefer to install Codex yourself, use:
 
@@ -60,6 +78,13 @@ If Codex is installed but not logged in yet, run:
 
 ```bash
 !codex login
+```
+
+If browser login is blocked, retry with:
+
+```bash
+!codex login --device-auth
+!codex login --with-api-key
 ```
 
 ### Local Checkout
@@ -80,6 +105,13 @@ Then, inside Claude Code:
 /codex-router:setup
 ```
 
+If you are upgrading an existing Claude Code install, rerun:
+
+```bash
+/plugin install codex-router@codex-router
+/reload-plugins
+```
+
 ## Install In Antigravity (`agy`)
 
 Codex Router ships an Antigravity plugin bundle for users who want AGY to delegate work to Codex through the same companion runtime.
@@ -98,22 +130,44 @@ The AGY bundle exposes a `codex-router` skill. That skill routes through:
 node <codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs
 ```
 
+In AGY itself, prefer asking the `codex-router` skill to run setup or models for you. Use the raw companion commands below when you want to inspect the runtime directly from the shell. When AGY relays setup output, the skill translates Claude Code-specific follow-up commands into equivalent shell commands for you.
+
+From the cloned `codex-router` checkout itself, run setup like this:
+
+```bash
+node "./plugins/codex-router/scripts/codex-companion.mjs" setup
+```
+
 When using the skill from a different project directory, set `CODEX_ROUTER_ROOT` to the cloned `codex-router` checkout so AGY can find the companion runtime:
 
 ```bash
 export CODEX_ROUTER_ROOT=/path/to/codex-router
 ```
 
-Run a setup check before delegating work:
+Then run setup from that external project directory:
 
 ```bash
 node "$CODEX_ROUTER_ROOT/plugins/codex-router/scripts/codex-companion.mjs" setup
 ```
 
+Inspect the live Codex model catalog before choosing a model or effort level:
+
+```bash
+node "$CODEX_ROUTER_ROOT/plugins/codex-router/scripts/codex-companion.mjs" models
+```
+
+If setup warns that a configured Codex model pin is stale for the current ChatGPT-backed session, use `models` to see the effective default, supported effort levels, `fast` tier availability, and the current `spark` target before delegating work.
+
 To uninstall the AGY bundle:
 
 ```bash
 agy plugin uninstall codex-router
+```
+
+If you are upgrading an existing AGY install from a local checkout, reinstall the bundle from the updated checkout so AGY picks up the new skill instructions:
+
+```bash
+agy plugin install ./.agy
 ```
 
 The AGY bundle does not register a separate MCP server. It teaches AGY to call the existing Codex Router runtime, which already uses the local Codex CLI and app-server integration.
@@ -125,9 +179,12 @@ After installing the AGY bundle, open AGY in the project you want Codex to inspe
 Example prompts:
 
 ```text
+Use codex-router to show me which Codex models and effort levels are available here.
 Use codex-router to review this repository with Codex.
+Use codex-router to run that review in the background, then show me the latest status and result.
 Use codex-router to ask Codex to investigate the failing test.
 Use codex-router to run a read-only Codex analysis of the cache design.
+Use codex-router to tell me whether setup is ready here, and if not, what exact shell command I should run next.
 ```
 
 For work outside the `codex-router` checkout, keep `CODEX_ROUTER_ROOT` set so the skill can find the companion runtime.
@@ -142,6 +199,7 @@ After installing in Claude Code, you should see:
 One simple first run is:
 
 ```bash
+/codex-router:models
 /codex-router:review --background
 /codex-router:status
 /codex-router:result
@@ -156,6 +214,32 @@ For implementation work, hand a bounded task to Codex:
 ```
 
 ## Usage
+
+### `/codex-router:models`
+
+Shows the live Codex model catalog for this machine, including which effort levels each model supports, whether the `fast` service tier is available, and what the plugin will treat as the effective default model.
+
+Examples:
+
+```bash
+/codex-router:models
+/codex-router:models --all
+/codex-router:models --json
+```
+
+Effective default behavior:
+
+- if no default model is pinned, Codex Router reports the current recommended live default
+- if a pinned default model is unavailable in a ChatGPT-authenticated session, default-inheriting runs fall back to the live recommended default
+- if a pinned default model is unavailable in a non-ChatGPT or custom-provider setup, Codex Router reports the configured pin and does not silently override it
+- `--all` includes hidden catalog entries in addition to the normal visible model list
+
+Use it when you want:
+
+- the current list of selectable Codex models
+- the supported effort levels for each model
+- confirmation that a default model pin is still valid
+- the `spark` alias target
 
 ### `/codex-router:analyze`
 
@@ -278,7 +362,7 @@ Examples:
 /codex-router:rescue investigate why the tests started failing
 /codex-router:rescue fix the failing test with the smallest safe patch
 /codex-router:rescue --resume apply the top fix from the last run
-/codex-router:rescue --model gpt-5.4-mini --effort medium investigate the flaky integration test
+/codex-router:rescue --best --effort medium investigate the flaky integration test
 /codex-router:rescue --model spark fix the issue quickly
 /codex-router:rescue --background investigate the regression
 ```
@@ -405,10 +489,10 @@ Codex Router wraps the [Codex app server](https://developers.openai.com/codex/ap
 
 ### Common Configurations
 
-If you want to change the default reasoning effort or the default model that gets used by the plugin, you can define that inside your user-level or project-level `config.toml`. For example to always use `gpt-5.4-mini` on `high` for a specific project you can add the following to a `.codex/config.toml` file at the root of the directory you started Claude in:
+If you want to change the default reasoning effort or the default model that gets used by the plugin, you can define that inside your user-level or project-level `config.toml`. Pick the model slug from the current live `/codex-router:models` report rather than hard-coding a historical example. For example, to pin the current preferred model from your live catalog on `high` for a specific project you can add the following to a `.codex/config.toml` file at the root of the directory you started Claude in:
 
 ```toml
-model = "gpt-5.4-mini"
+model = "<pick a current slug from /codex-router:models>"
 model_reasoning_effort = "high"
 ```
 
@@ -432,7 +516,11 @@ This way you can review the Codex work or continue the work there.
 
 If you are already signed into Codex on this machine, that account should work immediately here too. This plugin uses your local Codex CLI authentication.
 
-If you only use Claude Code today and have not used Codex yet, you will also need to sign in to Codex with either a ChatGPT account or an API key. [Codex is available with your ChatGPT subscription](https://developers.openai.com/codex/pricing/), and [`codex login`](https://developers.openai.com/codex/cli/reference/#codex-login) supports both ChatGPT and API key sign-in. Run `/codex-router:setup` to check whether Codex is ready, and use `!codex login` if it is not.
+If you only use Claude Code today and have not used Codex yet, the default OpenAI-backed path is to sign in with either a ChatGPT account or an API key. [Codex is available with your ChatGPT subscription](https://developers.openai.com/codex/pricing/), and [`codex login`](https://developers.openai.com/codex/cli/reference/#codex-login) supports both ChatGPT and API key sign-in.
+
+If your local Codex setup already points at a provider that does not require OpenAI authentication, Codex Router uses that same provider configuration and `/codex-router:setup` can still report ready without `codex login`.
+
+Run `/codex-router:setup` to check whether Codex is ready, and use `!codex login` only when setup says the active Codex path still needs OpenAI authentication. If browser login is blocked, use `!codex login --device-auth` or `!codex login --with-api-key`.
 
 ### Does the plugin use a separate Codex runtime?
 

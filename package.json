@@ -1,9 +1,9 @@
 {
   "name": "@compound/codex-router-plugin-cc",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
-  "description": "Route Claude Code work through Codex with policy-backed modes, model resolution, and reliable job handling.",
+  "description": "Route Claude Code and AGY work through Codex with live model discovery, policy-backed modes, and reliable job handling.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/gitguffaw/codex-router#readme",
   "repository": {
@@ -16,6 +16,9 @@
   "keywords": [
     "codex",
     "claude-code",
+    "agy",
+    "antigravity",
+    "models",
     "plugin",
     "review",
     "delegation"

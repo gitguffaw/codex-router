@@ -13,6 +13,8 @@ import {
     findLatestTaskThread,
     getCodexAuthStatus,
     getCodexAvailability,
+    getCodexDefaultModelStatus,
+    getCodexModelsReport,
     getSessionRuntimeStatus,
     parseStructuredOutput,
     readOutputSchema,
@@ -31,7 +33,7 @@ import {
   handleStatusCommand,
   handleTaskResumeCandidateCommand
 } from "./lib/job-commands.mjs";
-import { normalizeEffortControl, normalizeModelControl, resolveModelControls } from "./lib/model-resolution.mjs";
+import { resolveModelControls } from "./lib/model-resolution.mjs";
 import { binaryAvailable } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { buildRouterRequest } from "./lib/router.mjs";
@@ -57,6 +59,7 @@ import {
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 import {
+  renderModelsReport,
   renderNativeReviewResult,
   renderReviewResult,
   renderSetupReport,
@@ -72,6 +75,7 @@ function printUsage() {
     [
       "Usage:",
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
+      "  node scripts/codex-companion.mjs models [--all] [--json]",
       "  node scripts/codex-companion.mjs analyze [--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
       "  node scripts/codex-companion.mjs exec [--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>]",
@@ -189,12 +193,46 @@ function firstMeaningfulLine(text, fallback) {
   return line ?? fallback;
 }
 
+async function applyDefaultModelFallback(cwd, modelControls) {
+  if (modelControls.model || modelControls.resolvedFrom !== "codex-config") {
+    return {
+      modelControls,
+      modelWarning: null
+    };
+  }
+
+  const defaultModelStatus = await getCodexDefaultModelStatus(cwd);
+  if (defaultModelStatus.supported !== false || !defaultModelStatus.fallbackModel) {
+    return {
+      modelControls,
+      modelWarning: null
+    };
+  }
+
+  const fallbackControls = resolveModelControls(
+    {
+      model: defaultModelStatus.fallbackModel,
+      effort: modelControls.effort
+    },
+    { cwd }
+  );
+
+  return {
+    modelControls: {
+      ...fallbackControls,
+      resolvedFrom: "fallback-catalog"
+    },
+    modelWarning: `Configured default Codex model "${defaultModelStatus.configuredModel}" is unavailable for this ChatGPT-backed session. Using "${defaultModelStatus.fallbackModel}" instead.`
+  };
+}
+
 async function buildSetupReport(cwd, actionsTaken = []) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
   const authStatus = await getCodexAuthStatus(cwd);
+  const modelStatus = await getCodexDefaultModelStatus(cwd);
   const config = getConfig(workspaceRoot);
 
   const nextSteps = [];
@@ -204,6 +242,14 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   if (codexStatus.available && !authStatus.loggedIn && authStatus.requiresOpenaiAuth) {
     nextSteps.push("Run `!codex login`.");
     nextSteps.push("If browser login is blocked, retry with `!codex login --device-auth` or `!codex login --with-api-key`.");
+  }
+  if (modelStatus.supported === false) {
+    nextSteps.push(
+      modelStatus.recommendedModel
+        ? `Update the active Codex model pin to \`model = "${modelStatus.recommendedModel}"\`, or remove the \`model\` line so Codex can use its current default.`
+        : "Remove the active Codex `model` pin so Codex can use its current default."
+    );
+    nextSteps.push("Run `/codex-router:models` to inspect the live model catalog and available effort levels.");
   }
   if (!config.stopReviewGate) {
     nextSteps.push("Optional: run `/codex-router:setup --enable-review-gate` to require a fresh review before stop.");
@@ -215,6 +261,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     npm: npmStatus,
     codex: codexStatus,
     auth: authStatus,
+    model: modelStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
@@ -246,6 +293,20 @@ async function handleSetup(argv) {
 
   const finalReport = await buildSetupReport(cwd, actionsTaken);
   outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);
+}
+
+async function handleModels(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json", "all"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const report = await getCodexModelsReport(cwd, {
+    env: process.env,
+    includeHidden: Boolean(options.all)
+  });
+  outputResult(options.json ? report : renderModelsReport(report), options.json);
 }
 
 function buildAdversarialReviewPrompt(context, focusText) {
@@ -704,13 +765,14 @@ async function handleReviewCommand(argv, config) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const focusText = positionals.join(" ").trim();
-  const modelControls = resolveModelControls({
+  const requestedModelControls = resolveModelControls({
     model: options.model,
     effort: options.effort,
     best: Boolean(options.best),
     fast: Boolean(options.fast),
     spark: Boolean(options.spark)
   }, { cwd });
+  const { modelControls, modelWarning } = await applyDefaultModelFallback(cwd, requestedModelControls);
   const configArgs = collectConfigArgs(options);
   const target = resolveReviewTarget(cwd, {
     base: options.base,
@@ -746,6 +808,9 @@ async function handleReviewCommand(argv, config) {
     effort: modelControls.effort,
     serviceTier: modelControls.serviceTier
   });
+  if (modelWarning && !options.json) {
+    process.stderr.write(`${modelWarning}\n`);
+  }
   await runForegroundCommand(
     job,
     (progress) =>
@@ -785,13 +850,14 @@ async function handleRouterTurn(argv, mode) {
   if (resumeLast && options.fresh) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
-  const modelControls = resolveModelControls({
+  const requestedModelControls = resolveModelControls({
     model: options.model,
     effort: options.effort,
     best: Boolean(options.best),
     fast: Boolean(options.fast),
     spark: Boolean(options.spark)
   }, { cwd });
+  const { modelControls, modelWarning } = await applyDefaultModelFallback(cwd, requestedModelControls);
   const configArgs = collectConfigArgs(options);
   const route = buildRouterRequest({
     mode,
@@ -849,6 +915,9 @@ async function handleRouterTurn(argv, mode) {
     contextPack,
     taskMetadata
   };
+  if (modelWarning && !options.json) {
+    process.stderr.write(`${modelWarning}\n`);
+  }
 
   if (options.background) {
     ensureCodexAvailable(cwd);
@@ -883,8 +952,6 @@ async function handleTask(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const model = normalizeModelControl(options.model);
-  const effort = normalizeEffortControl(options.effort);
   const configArgs = collectConfigArgs(options);
   const prompt = readTaskPrompt(cwd, options, positionals);
 
@@ -898,6 +965,16 @@ async function handleTask(argv) {
     prompt,
     resumeLast
   });
+  const requestedModelControls = resolveModelControls({
+    model: options.model,
+    effort: options.effort
+  }, { cwd });
+  const { modelControls, modelWarning } = await applyDefaultModelFallback(cwd, requestedModelControls);
+  const model = modelControls.model;
+  const effort = modelControls.effort;
+  if (modelWarning && !options.json) {
+    process.stderr.write(`${modelWarning}\n`);
+  }
 
   if (options.background) {
     ensureCodexAvailable(cwd);
@@ -993,6 +1070,9 @@ async function main() {
   switch (subcommand) {
     case "setup":
       await handleSetup(argv);
+      break;
+    case "models":
+      await handleModels(argv);
       break;
     case "analyze":
       await handleRouterTurn(argv, "analyze");

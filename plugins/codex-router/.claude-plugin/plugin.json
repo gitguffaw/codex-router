@@ -1,8 +1,8 @@
 {
   "name": "codex-router",
   "displayName": "Codex Router",
-  "version": "2.0.0",
-  "description": "Route Claude Code work through Codex with reliable jobs and explicit policy controls.",
+  "version": "2.1.0",
+  "description": "Route Claude Code work through Codex with live model discovery, reliable jobs, and explicit policy controls.",
   "author": {
     "name": "Compound"
   },
@@ -12,6 +12,8 @@
   "keywords": [
     "codex",
     "claude-code",
+    "agy",
+    "models",
     "review",
     "delegation"
   ]
