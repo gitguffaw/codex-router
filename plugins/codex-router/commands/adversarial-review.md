@@ -43,7 +43,7 @@ Argument handling:
 - `/codex-router:adversarial-review` uses the same review target selection as `/codex-router:review`.
 - It supports working-tree review, branch review, and `--base <ref>`.
 - It does not support `--scope staged` or `--scope unstaged`.
-- Unlike `/codex-router:review`, it can still take extra focus text after the flags.
+- It can take extra focus text after the flags; focused `/codex-router:review` requests are promoted to this same companion path.
 
 Foreground flow:
 - Run:

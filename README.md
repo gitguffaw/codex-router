@@ -4,12 +4,13 @@ Use Codex from Claude Code or Antigravity (`agy`) with policy-backed routing, mo
 
 Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace for Claude Code and ships an AGY skill bundle for Antigravity. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
-## What's New In 2.1.0
+## What's New In 2.1.1
 
-- `/codex-router:models` exposes the live Codex model catalog, supported effort levels, `fast` tier support, aliases such as `spark`, and the effective default model for the current machine.
-- `/codex-router:setup` now surfaces stale ChatGPT-backed model pins and points users to `models` instead of leaving model recovery implicit.
+- Focused `/codex-router:review` requests now promote directly to the adversarial review runtime path, preserving custom focus text without asking Claude to invoke another user-only slash command.
+- 2.1.0 added `/codex-router:models`, exposing the live Codex model catalog, supported effort levels, `fast` tier support, aliases such as `spark`, and the effective default model for the current machine.
+- 2.1.0 also taught `/codex-router:setup` to surface stale ChatGPT-backed model pins and point users to `models` instead of leaving model recovery implicit.
 - Default-inheriting runs can fall back to the live recommended ChatGPT default when a configured default model pin is stale, while explicit unavailable model ids fail early.
-- The Antigravity (`agy`) skill now documents the same `setup -> models -> delegated run` workflow as the Claude Code surface.
+- The Antigravity (`agy`) skill documents the same `setup -> models -> delegated run` workflow as the Claude Code surface.
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
 
@@ -303,7 +304,7 @@ Use it when you want:
 - a review of your current uncommitted changes
 - a review of your branch compared to a base branch like `main`
 
-Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/codex-router:adversarial-review`](#codex-routeradversarial-review) when you want to challenge a specific decision or risk area.
+Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. By default it is not steerable. If you add focus text after the flags, the runtime promotes the request to [`/codex-router:adversarial-review`](#codex-routeradversarial-review) so the focus instructions are honored.
 
 Examples:
 
@@ -311,6 +312,7 @@ Examples:
 /codex-router:review
 /codex-router:review --base main
 /codex-router:review --background
+/codex-router:review --background fact-check the runbooks against upstream repository behavior
 ```
 
 This command is read-only and will not perform any changes. When run in the background you can use [`/codex-router:status`](#codex-routerstatus) to check on the progress and [`/codex-router:cancel`](#codex-routercancel) to cancel the ongoing task.
@@ -322,7 +324,7 @@ Runs a **steerable** review that questions the chosen implementation and design.
 It can be used to pressure-test assumptions, tradeoffs, failure modes, and whether a different approach would have been safer or simpler.
 
 It uses the same review target selection as `/codex-router:review`, including `--base <ref>` for branch review.
-It also supports `--wait` and `--background`. Unlike `/codex-router:review`, it can take extra focus text after the flags.
+It also supports `--wait` and `--background`, and it is the canonical command for focus text after the flags. `/codex-router:review` with focus text is promoted to this same path.
 
 Use it when you want:
 

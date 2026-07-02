@@ -3,6 +3,10 @@ import type {
   InitializeCapabilities,
   InitializeParams,
   InitializeResponse,
+  ConfigReadParams,
+  ConfigReadResponse,
+  GetAccountParams,
+  GetAccountResponse,
   ServerNotification
 } from "../../.generated/app-server-types/index.js";
 import type {
@@ -64,6 +68,8 @@ export interface AppServerMethodMap {
   "review/start": { params: ReviewStartParams; result: ReviewStartResponse };
   "turn/start": { params: TurnStartParams; result: TurnStartResponse };
   "turn/interrupt": { params: TurnInterruptParams; result: TurnInterruptResponse };
+  "account/read": { params: GetAccountParams; result: GetAccountResponse };
+  "config/read": { params: ConfigReadParams; result: ConfigReadResponse };
 }
 
 export type AppServerMethod = keyof AppServerMethodMap;

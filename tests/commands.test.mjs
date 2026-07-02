@@ -39,7 +39,8 @@ test("review command uses AskUserQuestion and background Bash while staying revi
   assert.match(source, /Claude Code's `Bash\(..., run_in_background: true\)` is what actually detaches the run/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
-  assert.match(source, /does not support staged-only review, unstaged-only review, or extra focus text/i);
+  assert.match(source, /normally uses native review and does not support staged-only review or unstaged-only review/i);
+  assert.match(source, /promotes focused requests to its `adversarial-review` subcommand/i);
 });
 
 test("adversarial review command uses AskUserQuestion and background Bash while staying review-only", () => {
@@ -73,7 +74,8 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /uses the same review target selection as `\/codex-router:review`/i);
   assert.match(source, /supports working-tree review, branch review, and `--base <ref>`/i);
   assert.match(source, /does not support `--scope staged` or `--scope unstaged`/i);
-  assert.match(source, /can still take extra focus text after the flags/i);
+  assert.match(source, /can take extra focus text after the flags/i);
+  assert.match(source, /focused `\/codex-router:review` requests are promoted to this same companion path/i);
 });
 
 test("continue is not exposed as a user-facing command", () => {
@@ -293,7 +295,8 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(readme, /install or upgrade Codex for you/i);
   assert.match(readme, /!codex login --device-auth/);
   assert.match(readme, /!codex login --with-api-key/);
-  assert.match(readme, /## What's New In 2\.1\.0/);
+  assert.match(readme, /## What's New In 2\.1\.1/);
+  assert.match(readme, /Focused `\/codex-router:review` requests now promote directly/i);
   assert.match(readme, /One host surface, depending on how you want to use Codex Router/i);
   assert.match(readme, /If you are upgrading an existing Claude Code install/i);
   assert.match(readme, /\/codex-router:setup --enable-review-gate/);

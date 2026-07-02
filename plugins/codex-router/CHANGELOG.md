@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.1
+
+- Fix focused `/codex-router:review` requests so extra focus text promotes directly to the adversarial review runtime path instead of failing native-review validation.
+- Clarify review command docs so Claude preserves focus text and does not try to invoke the user-only `/codex-router:adversarial-review` slash command from inside another command.
+- Add the app-server protocol type entries for `account/read` and `config/read` so release builds type-check against the current generated Codex API surface.
+
 ## 2.1.0
 
 - Add `/codex-router:models` as a first-class live model catalog for Claude Code and AGY users, including supported effort levels, `fast` tier visibility, alias reporting, and effective default selection.

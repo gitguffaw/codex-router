@@ -1291,7 +1291,7 @@ test("task --background enqueues a detached worker and exposes per-job status", 
   assert.match(resultPayload.storedJob.rendered, /Handled the requested task/);
 });
 
-test("review rejects focus text because it is native-review only", () => {
+test("review with focus text promotes to adversarial review", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
@@ -1306,9 +1306,11 @@ test("review rejects focus text because it is native-review only", () => {
     env: buildEnv(binDir)
   });
 
-  assert.equal(result.status > 0, true);
-  assert.match(result.stderr, /does not support custom focus text/i);
-  assert.match(result.stderr, /\/codex-router:adversarial-review focus on auth/i);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /# Codex Adversarial Review/);
+  assert.match(result.stdout, /Missing empty-state guard/);
+  const state = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
+  assert.match(state.lastTurnStart.prompt, /User focus: focus on auth/);
 });
 
 test("review rejects staged-only scope because it is native-review only", () => {

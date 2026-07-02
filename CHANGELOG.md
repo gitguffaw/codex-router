@@ -4,5 +4,6 @@ Public release history for Codex Router is tracked in the plugin changelog at [p
 
 ## Latest
 
+- [2.1.1](./plugins/codex-router/CHANGELOG.md#211): bugfix for focused `/codex-router:review` requests promoting directly to adversarial review without recursive slash-command invocation.
 - [2.1.0](./plugins/codex-router/CHANGELOG.md#210): live model catalog discovery, stale default-model recovery, AGY parity updates, and release-surface documentation/test coverage.
 - [2.0.0](./plugins/codex-router/CHANGELOG.md#200): first public release line for the Codex Router Claude Code plugin and AGY bundle.

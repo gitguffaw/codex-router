@@ -1,11 +1,12 @@
 ---
 description: Run a Codex Router code review against local git state
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>]'
+argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus ...]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
 Run a Codex review through the shared built-in reviewer.
+If the user supplied focus text after the flags, the companion runtime automatically runs the same request as an adversarial review because the built-in reviewer cannot accept focus instructions.
 
 Raw slash-command arguments:
 `$ARGUMENTS`
@@ -37,8 +38,8 @@ Argument handling:
 - Do not add extra review instructions or rewrite the user's intent.
 - Preserve `-c`/`--config`, `--enable`, and `--disable`; the companion runtime passes them to Codex.
 - The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
-- `/codex-router:review` is native-review only. It does not support staged-only review, unstaged-only review, or extra focus text.
-- If the user needs custom review instructions or more adversarial framing, they should use `/codex-router:adversarial-review`.
+- `/codex-router:review` normally uses native review and does not support staged-only review or unstaged-only review.
+- Extra focus text is preserved. The companion runtime promotes focused requests to its `adversarial-review` subcommand; do not try to invoke `/codex-router:adversarial-review` yourself from inside this command.
 
 Foreground flow:
 - Run:

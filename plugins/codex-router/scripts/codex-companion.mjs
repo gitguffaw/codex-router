@@ -342,13 +342,13 @@ function buildNativeReviewTarget(target) {
 function validateNativeReviewRequest(target, focusText) {
   if (focusText.trim()) {
     throw new Error(
-      `\`/codex-router:review\` now maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex-router:adversarial-review ${focusText.trim()}\` for focused review instructions.`
+      `The built-in reviewer does not support custom focus text. Run the companion adversarial-review command with this focus instead: ${focusText.trim()}`
     );
   }
 
   const nativeTarget = buildNativeReviewTarget(target);
   if (!nativeTarget) {
-    throw new Error("This `/codex-router:review` target is not supported by the built-in reviewer. Retry with `/codex-router:adversarial-review` for custom targeting.");
+    throw new Error("This review target is not supported by the built-in reviewer. Run the companion adversarial-review command for custom targeting.");
   }
 
   return nativeTarget;
@@ -595,6 +595,13 @@ function buildReviewJobMetadata(reviewName, target) {
   };
 }
 
+function effectiveReviewName(requestedReviewName, focusText) {
+  if (requestedReviewName === "Review" && focusText.trim()) {
+    return "Adversarial Review";
+  }
+  return requestedReviewName;
+}
+
 function buildTaskRunMetadata({ prompt, resumeLast = false }) {
   if (!resumeLast && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
     return {
@@ -778,11 +785,14 @@ async function handleReviewCommand(argv, config) {
     base: options.base,
     scope: options.scope
   });
+  const reviewName = effectiveReviewName(config.reviewName, focusText);
 
-  config.validateRequest?.(target, focusText);
+  if (reviewName === config.reviewName) {
+    config.validateRequest?.(target, focusText);
+  }
   const contextPack = createContextPack(workspaceRoot, {
     mode: "review",
-    workflow: "Review",
+    workflow: reviewName,
     userRequest: focusText,
     prompt: focusText,
     modifiers: [],
@@ -795,7 +805,7 @@ async function handleReviewCommand(argv, config) {
     },
     nonGoals: ["Do not edit files from review mode."]
   });
-  const metadata = buildReviewJobMetadata(config.reviewName, target);
+  const metadata = buildReviewJobMetadata(reviewName, target);
   const job = createCompanionJob({
     prefix: "review",
     kind: metadata.kind,
@@ -825,7 +835,7 @@ async function handleReviewCommand(argv, config) {
         serviceTier: modelControls.serviceTier,
         contextPack,
         focusText,
-        reviewName: config.reviewName,
+        reviewName,
         onProgress: progress
       }),
     { json: options.json }
