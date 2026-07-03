@@ -64,7 +64,7 @@ test("Antigravity documentation covers install, uninstall, and runtime boundarie
   assert.match(skill, /Do not turn a failed or incomplete Codex run into an Antigravity-side implementation attempt/i);
 });
 
-test("public release metadata and changelog advertise the 2.1.1 focused-review bugfix release", () => {
+test("public release metadata and changelog versions are consistent and current", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
   const marketplace = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "marketplace.json"), "utf8"));
   const pluginManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "plugins", "codex-router", ".claude-plugin", "plugin.json"), "utf8"));
@@ -72,11 +72,13 @@ test("public release metadata and changelog advertise the 2.1.1 focused-review b
   const rootChangelog = fs.readFileSync(path.join(ROOT, "CHANGELOG.md"), "utf8");
   const pluginChangelog = fs.readFileSync(path.join(ROOT, "plugins", "codex-router", "CHANGELOG.md"), "utf8");
 
-  assert.equal(packageJson.version, "2.1.1");
+  const expectedVersion = packageJson.version;
+  assert.match(expectedVersion, /^\d+\.\d+\.\d+$/);
+
+  assert.equal(marketplace.version, expectedVersion);
   assert.match(packageJson.description, /live model discovery/i);
   assert.match(packageJson.description, /AGY/i);
 
-  assert.equal(marketplace.version, "2.1.1");
   assert.match(marketplace.description, /live model discovery/i);
   assert.match(marketplace.description, /AGY/i);
   assert.match(marketplace.metadata.description, /live model discovery/i);
@@ -86,20 +88,18 @@ test("public release metadata and changelog advertise the 2.1.1 focused-review b
   assert.ok(marketplace.plugins[0].tags.includes("agy"));
   assert.ok(marketplace.plugins[0].tags.includes("models"));
 
-  assert.equal(pluginManifest.version, "2.1.1");
+  assert.equal(pluginManifest.version, expectedVersion);
   assert.match(pluginManifest.description, /live model discovery/i);
   assert.ok(pluginManifest.keywords.includes("agy"));
   assert.ok(pluginManifest.keywords.includes("models"));
 
   assert.match(readme, /See \[CHANGELOG\.md\]/);
-  assert.match(readme, /Focused `\/codex-router:review` requests now promote directly/i);
-  assert.match(readme, /current live `\/codex-router:models` report/i);
+  assert.match(readme, new RegExp(`## What's New In ${expectedVersion.replace(/\./g, "\\.")}`));
   assert.doesNotMatch(readme, /gpt-5\.4-mini/);
   assert.match(rootChangelog, /## Latest/);
-  assert.match(rootChangelog, /\[2\.1\.1\]/);
+  assert.match(rootChangelog, new RegExp(`\\[${expectedVersion.replace(/\./g, "\\.")}\\]`));
   assert.match(rootChangelog, /\[2\.1\.0\]/);
-  assert.match(pluginChangelog, /## 2\.1\.1/);
-  assert.match(pluginChangelog, /focused `\/codex-router:review` requests/i);
+  assert.match(pluginChangelog, new RegExp(`## ${expectedVersion.replace(/\./g, "\\.")}`));
   assert.match(pluginChangelog, /## 2\.1\.0/);
   assert.match(pluginChangelog, /AGY release parity/i);
 });
