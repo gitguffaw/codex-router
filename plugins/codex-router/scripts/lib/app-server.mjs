@@ -252,7 +252,7 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
           } else {
             this.proc.kill("SIGTERM");
             setTimeout(() => {
-              if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
+              if (this.proc && this.proc.exitCode === null) {
                 try {
                   this.proc.kill("SIGKILL");
                 } catch {
