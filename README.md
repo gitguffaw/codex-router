@@ -4,13 +4,13 @@ Use Codex from Claude Code or Antigravity (`agy`) with policy-backed routing, mo
 
 Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace for Claude Code and ships an AGY skill bundle for Antigravity. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
-## What's New In 2.1.1
+## What's New In 2.2.0
 
-- Focused `/codex-router:review` requests now promote directly to the adversarial review runtime path, preserving custom focus text without asking Claude to invoke another user-only slash command.
-- 2.1.0 added `/codex-router:models`, exposing the live Codex model catalog, supported effort levels, `fast` tier support, aliases such as `spark`, and the effective default model for the current machine.
-- 2.1.0 also taught `/codex-router:setup` to surface stale ChatGPT-backed model pins and point users to `models` instead of leaving model recovery implicit.
-- Default-inheriting runs can fall back to the live recommended ChatGPT default when a configured default model pin is stale, while explicit unavailable model ids fail early.
-- The Antigravity (`agy`) skill documents the same `setup -> models -> delegated run` workflow as the Claude Code surface.
+- The broker process now self-terminates after 10 minutes of idle time when no clients are connected, preventing orphaned process accumulation when Claude sessions end without firing the SessionEnd hook.
+- Broker session state records the process start time alongside the PID, detecting stale entries that point at recycled OS PIDs.
+- An exclusive lock file prevents concurrent callers from racing to spawn duplicate brokers for the same workspace.
+- App-server cleanup now escalates from SIGTERM to SIGKILL after a grace period, ensuring processes actually terminate.
+- See [2.1.1](./plugins/codex-router/CHANGELOG.md#211) and [2.1.0](./plugins/codex-router/CHANGELOG.md#210) for earlier changes including focused review promotion, live model catalog, and AGY parity.
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
 
