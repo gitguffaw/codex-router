@@ -243,18 +243,23 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
       this.proc.stdin.end();
       setTimeout(() => {
         if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
-          // On Windows with shell: true, the direct child is cmd.exe.
-          // Use terminateProcessTree to kill the entire tree including
-          // the grandchild node process.
           if (process.platform === "win32") {
             try {
               terminateProcessTree(this.proc.pid);
             } catch {
-              // Best-effort cleanup inside an unref'd timer — swallow errors
-              // to avoid crashing the host process during shutdown.
+              // Best-effort cleanup.
             }
           } else {
             this.proc.kill("SIGTERM");
+            setTimeout(() => {
+              if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
+                try {
+                  this.proc.kill("SIGKILL");
+                } catch {
+                  // Process may have exited between check and SIGKILL.
+                }
+              }
+            }, 5000).unref?.();
           }
         }
       }, 50).unref?.();

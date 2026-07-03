@@ -117,6 +117,39 @@ export function terminateProcessTree(pid, options = {}) {
   }
 }
 
+export async function terminateWithEscalation(pid, options = {}) {
+  const graceMs = options.graceMs ?? 5000;
+  const result = terminateProcessTree(pid, options);
+  if (!result.delivered) {
+    return result;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, graceMs));
+
+  const killImpl = options.killImpl ?? process.kill.bind(process);
+  try {
+    killImpl(pid, 0);
+  } catch {
+    return result;
+  }
+
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    return { ...result, escalated: true };
+  }
+
+  try {
+    killImpl(-pid, "SIGKILL");
+  } catch {
+    try {
+      killImpl(pid, "SIGKILL");
+    } catch {
+      // Process may have exited between the liveness check and SIGKILL.
+    }
+  }
+  return { ...result, escalated: true };
+}
+
 export function formatCommandFailure(result) {
   const parts = [`${result.command} ${result.args.join(" ")}`.trim()];
   if (result.signal) {
