@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.0
+
+- Prevent orphaned broker processes from accumulating when the SessionEnd hook does not fire (crash, force-kill, or abrupt session termination).
+- Add idle timeout (10 minutes default) to the broker process so it self-terminates when no clients are connected, eliminating the primary source of process leaks.
+- Record process start time alongside PID in broker session state to detect stale entries pointing at recycled PIDs.
+- Add exclusive lock file during broker spawn to prevent concurrent callers from racing to create duplicate brokers.
+- Add SIGTERM-to-SIGKILL escalation in the app-server client close path and a new `terminateWithEscalation()` utility to ensure processes actually terminate during cleanup.
+- Expose `--idle-timeout <ms>` on the broker CLI for shorter timeouts in tests.
+
 ## 2.1.1
 
 - Fix focused `/codex-router:review` requests so extra focus text promotes directly to the adversarial review runtime path instead of failing native-review validation.

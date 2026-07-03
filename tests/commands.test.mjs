@@ -295,8 +295,8 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(readme, /install or upgrade Codex for you/i);
   assert.match(readme, /!codex login --device-auth/);
   assert.match(readme, /!codex login --with-api-key/);
-  assert.match(readme, /## What's New In 2\.1\.1/);
-  assert.match(readme, /Focused `\/codex-router:review` requests now promote directly/i);
+  const expectedVersion = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
+  assert.match(readme, new RegExp(`## What's New In ${expectedVersion.replace(/\./g, "\\.")}`));
   assert.match(readme, /One host surface, depending on how you want to use Codex Router/i);
   assert.match(readme, /If you are upgrading an existing Claude Code install/i);
   assert.match(readme, /\/codex-router:setup --enable-review-gate/);

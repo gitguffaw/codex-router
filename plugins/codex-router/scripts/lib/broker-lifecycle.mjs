@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mjs";
 import { resolveStateDir } from "./state.mjs";
@@ -11,6 +11,77 @@ import { resolveStateDir } from "./state.mjs";
 export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
 export const LOG_FILE_ENV = "CODEX_COMPANION_APP_SERVER_LOG_FILE";
 const BROKER_STATE_FILE = "broker.json";
+const BROKER_LOCK_FILE = "broker.lock";
+
+function getProcessStartTime(pid) {
+  if (process.platform === "win32" || !Number.isFinite(pid)) {
+    return null;
+  }
+  try {
+    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 2000
+    });
+    return result.status === 0 ? result.stdout.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function processMatchesRecord(pid, recordedStartTime) {
+  if (!recordedStartTime) {
+    return true;
+  }
+  const currentStartTime = getProcessStartTime(pid);
+  if (!currentStartTime) {
+    return false;
+  }
+  return currentStartTime === recordedStartTime;
+}
+
+function acquireSpawnLock(cwd) {
+  const lockFile = path.join(resolveStateDir(cwd), BROKER_LOCK_FILE);
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  try {
+    const fd = fs.openSync(lockFile, "wx");
+    fs.writeSync(fd, `${process.pid}\n`);
+    fs.closeSync(fd);
+    return lockFile;
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+    try {
+      const lockPid = Number(fs.readFileSync(lockFile, "utf8").trim());
+      if (Number.isFinite(lockPid)) {
+        process.kill(lockPid, 0);
+        return null;
+      }
+    } catch {
+      // Lock holder is dead — remove stale lock and retry once.
+    }
+    try {
+      fs.unlinkSync(lockFile);
+      const fd = fs.openSync(lockFile, "wx");
+      fs.writeSync(fd, `${process.pid}\n`);
+      fs.closeSync(fd);
+      return lockFile;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function releaseSpawnLock(lockFile) {
+  if (lockFile) {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {
+      // Already removed.
+    }
+  }
+}
 
 export function createBrokerSessionDir(prefix = "cxc-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -112,62 +183,78 @@ async function isBrokerEndpointReady(endpoint) {
 
 export async function ensureBrokerSession(cwd, options = {}) {
   const existing = loadBrokerSession(cwd);
-  if (existing && (await isBrokerEndpointReady(existing.endpoint))) {
-    return existing;
-  }
-
   if (existing) {
+    const pidStale = existing.pid && !processMatchesRecord(existing.pid, existing.startTime ?? null);
+    if (!pidStale && (await isBrokerEndpointReady(existing.endpoint))) {
+      return existing;
+    }
+
     teardownBrokerSession({
       endpoint: existing.endpoint ?? null,
       pidFile: existing.pidFile ?? null,
       logFile: existing.logFile ?? null,
       sessionDir: existing.sessionDir ?? null,
       pid: existing.pid ?? null,
-      killProcess: options.killProcess ?? null
+      killProcess: pidStale ? null : (options.killProcess ?? null)
     });
     clearBrokerSession(cwd);
   }
 
-  const sessionDir = createBrokerSessionDir();
-  const endpointFactory = options.createBrokerEndpoint ?? createBrokerEndpoint;
-  const endpoint = endpointFactory(sessionDir, options.platform);
-  const pidFile = path.join(sessionDir, "broker.pid");
-  const logFile = path.join(sessionDir, "broker.log");
-  const scriptPath =
-    options.scriptPath ??
-    fileURLToPath(new URL("../app-server-broker.mjs", import.meta.url));
+  const lockFile = acquireSpawnLock(cwd);
+  if (!lockFile) {
+    const retrySession = loadBrokerSession(cwd);
+    if (retrySession && (await isBrokerEndpointReady(retrySession.endpoint))) {
+      return retrySession;
+    }
+    return null;
+  }
 
-  const child = spawnBrokerProcess({
-    scriptPath,
-    cwd,
-    endpoint,
-    pidFile,
-    logFile,
-    env: options.env ?? process.env
-  });
+  try {
+    const sessionDir = createBrokerSessionDir();
+    const endpointFactory = options.createBrokerEndpoint ?? createBrokerEndpoint;
+    const endpoint = endpointFactory(sessionDir, options.platform);
+    const pidFile = path.join(sessionDir, "broker.pid");
+    const logFile = path.join(sessionDir, "broker.log");
+    const scriptPath =
+      options.scriptPath ??
+      fileURLToPath(new URL("../app-server-broker.mjs", import.meta.url));
 
-  const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? 2000);
-  if (!ready) {
-    teardownBrokerSession({
+    const child = spawnBrokerProcess({
+      scriptPath,
+      cwd,
+      endpoint,
+      pidFile,
+      logFile,
+      env: options.env ?? process.env
+    });
+
+    const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? 2000);
+    if (!ready) {
+      teardownBrokerSession({
+        endpoint,
+        pidFile,
+        logFile,
+        sessionDir,
+        pid: child.pid ?? null,
+        killProcess: options.killProcess ?? null
+      });
+      return null;
+    }
+
+    const startTime = getProcessStartTime(child.pid);
+    const session = {
       endpoint,
       pidFile,
       logFile,
       sessionDir,
       pid: child.pid ?? null,
-      killProcess: options.killProcess ?? null
-    });
-    return null;
+      startTime
+    };
+    saveBrokerSession(cwd, session);
+    return session;
+  } finally {
+    releaseSpawnLock(lockFile);
   }
-
-  const session = {
-    endpoint,
-    pidFile,
-    logFile,
-    sessionDir,
-    pid: child.pid ?? null
-  };
-  saveBrokerSession(cwd, session);
-  return session;
 }
 
 export function teardownBrokerSession({ endpoint = null, pidFile, logFile, sessionDir = null, pid = null, killProcess = null }) {

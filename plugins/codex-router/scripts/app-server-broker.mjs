@@ -45,14 +45,16 @@ function writePidFile(pidFile) {
   fs.writeFileSync(pidFile, `${process.pid}\n`, "utf8");
 }
 
+const DEFAULT_IDLE_TIMEOUT_MS = 600_000;
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (subcommand !== "serve") {
-    throw new Error("Usage: node scripts/app-server-broker.mjs serve --endpoint <value> [--cwd <path>] [--pid-file <path>]");
+    throw new Error("Usage: node scripts/app-server-broker.mjs serve --endpoint <value> [--cwd <path>] [--pid-file <path>] [--idle-timeout <ms>]");
   }
 
   const { options } = parseArgs(argv, {
-    valueOptions: ["cwd", "pid-file", "endpoint"]
+    valueOptions: ["cwd", "pid-file", "endpoint", "idle-timeout"]
   });
 
   if (!options.endpoint) {
@@ -63,6 +65,7 @@ async function main() {
   const endpoint = String(options.endpoint);
   const listenTarget = parseBrokerEndpoint(endpoint);
   const pidFile = options["pid-file"] ? path.resolve(options["pid-file"]) : null;
+  const idleTimeoutMs = Number(options["idle-timeout"] ?? DEFAULT_IDLE_TIMEOUT_MS);
   writePidFile(pidFile);
 
   const appClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
@@ -70,6 +73,25 @@ async function main() {
   let activeStreamSocket = null;
   let activeStreamThreadIds = null;
   const sockets = new Set();
+  let idleTimer = null;
+
+  function resetIdleTimer() {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  }
+
+  function startIdleTimer() {
+    resetIdleTimer();
+    if (idleTimeoutMs > 0 && sockets.size === 0) {
+      idleTimer = setTimeout(async () => {
+        await shutdown(server);
+        process.exit(0);
+      }, idleTimeoutMs);
+      idleTimer.unref?.();
+    }
+  }
 
   function clearSocketOwnership(socket) {
     if (activeRequestSocket === socket) {
@@ -117,6 +139,7 @@ async function main() {
 
   const server = net.createServer((socket) => {
     sockets.add(socket);
+    resetIdleTimer();
     socket.setEncoding("utf8");
     let buffer = "";
 
@@ -225,11 +248,13 @@ async function main() {
     socket.on("close", () => {
       sockets.delete(socket);
       clearSocketOwnership(socket);
+      startIdleTimer();
     });
 
     socket.on("error", () => {
       sockets.delete(socket);
       clearSocketOwnership(socket);
+      startIdleTimer();
     });
   });
 
@@ -244,6 +269,7 @@ async function main() {
   });
 
   server.listen(listenTarget.path);
+  startIdleTimer();
 }
 
 main().catch((error) => {
