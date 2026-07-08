@@ -14,6 +14,11 @@ for (const key of Object.keys(process.env)) {
   }
 }
 
+// Set after the scrub so every spawned CLI (and hand-rolled `...process.env`
+// spread) shortens the broker idle timeout: test brokers must exit seconds
+// after the suite finishes, not linger for the ten-minute production default.
+process.env.CODEX_COMPANION_BROKER_IDLE_TIMEOUT_MS = "2000";
+
 export function makeTempDir(prefix = "codex-plugin-test-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }

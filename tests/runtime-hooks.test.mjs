@@ -498,3 +498,52 @@ test("setup and status honor --cwd when reading shared session runtime", () => {
   assert.equal(payload.sessionRuntime.mode, "shared");
   assert.equal(payload.sessionRuntime.endpoint, session.endpoint);
 });
+
+test("stop hook stops blocking after three consecutive blocks in one stop chain", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(setup.status, 0, setup.stderr);
+
+  const hookInput = (stopHookActive) =>
+    JSON.stringify({
+      cwd: repo,
+      session_id: "sess-stop-cap",
+      stop_hook_active: stopHookActive,
+      last_assistant_message: "I completed the refactor and updated the retry logic."
+    });
+
+  // First stop attempt of the chain (stop_hook_active absent) blocks.
+  const first = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(false) });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(JSON.parse(first.stdout).decision, "block");
+
+  // Second and third attempts (continuing due to the stop hook) still block.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const blocked = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(true) });
+    assert.equal(blocked.status, 0, blocked.stderr);
+    assert.equal(JSON.parse(blocked.stdout).decision, "block");
+  }
+
+  // Fourth attempt hits the cap: the stop is allowed and the unresolved
+  // findings are downgraded to a stderr note.
+  const capped = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(true) });
+  assert.equal(capped.status, 0, capped.stderr);
+  assert.equal(capped.stdout.trim(), "");
+  assert.match(capped.stderr, /reached its cap of 3 consecutive blocks/i);
+  assert.match(capped.stderr, /Codex stop-time review found issues/i);
+
+  // A fresh stop chain (stop_hook_active absent) starts blocking again.
+  const fresh = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(false) });
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.equal(JSON.parse(fresh.stdout).decision, "block");
+});

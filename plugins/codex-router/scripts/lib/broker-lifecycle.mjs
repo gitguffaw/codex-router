@@ -112,9 +112,17 @@ export async function sendBrokerShutdown(endpoint) {
   });
 }
 
+export const BROKER_IDLE_TIMEOUT_ENV = "CODEX_COMPANION_BROKER_IDLE_TIMEOUT_MS";
+
 export function spawnBrokerProcess({ scriptPath, cwd, endpoint, pidFile, logFile, env = process.env }) {
   const logFd = fs.openSync(logFile, "a");
-  const child = spawn(process.execPath, [scriptPath, "serve", "--endpoint", endpoint, "--cwd", cwd, "--pid-file", pidFile], {
+  // Tests (and other short-lived callers) can shorten the broker idle timeout
+  // so spawned brokers exit promptly instead of lingering for the ten-minute
+  // default after the caller is gone.
+  const idleTimeoutMs = Number(env?.[BROKER_IDLE_TIMEOUT_ENV]);
+  const idleArgs =
+    Number.isFinite(idleTimeoutMs) && idleTimeoutMs > 0 ? ["--idle-timeout", String(idleTimeoutMs)] : [];
+  const child = spawn(process.execPath, [scriptPath, "serve", "--endpoint", endpoint, "--cwd", cwd, "--pid-file", pidFile, ...idleArgs], {
     cwd,
     env,
     detached: true,

@@ -8,12 +8,13 @@ import { fileURLToPath } from "node:url";
 
 import { getCodexAvailability } from "./lib/codex.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
-import { getConfig, listJobs } from "./lib/state.mjs";
+import { getConfig, listJobs, setConfig } from "./lib/state.mjs";
 import { sortJobsNewestFirst } from "./lib/job-control.mjs";
 import { SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_CONSECUTIVE_BLOCKS = 3;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 
@@ -162,8 +163,29 @@ function main() {
     return;
   }
 
+  // Loop protection: Claude Code sets stop_hook_active when the session is
+  // already continuing because a stop hook blocked. Track how many times this
+  // chain has blocked and stop blocking after MAX_CONSECUTIVE_BLOCKS so a
+  // nitpicking or flaky review can never trap the session in an endless
+  // fix-review loop. A fresh stop attempt (stop_hook_active absent) resets
+  // the chain.
+  const sessionId = input.session_id || process.env[SESSION_ID_ENV] || null;
+  const chain = config.stopReviewGateChain;
+  const priorBlocks =
+    input.stop_hook_active && chain && chain.sessionId === sessionId ? Number(chain.blocks) || 0 : 0;
+
   const review = runStopReview(cwd, input);
   if (!review.ok) {
+    if (input.stop_hook_active && priorBlocks >= MAX_CONSECUTIVE_BLOCKS) {
+      setConfig(workspaceRoot, "stopReviewGateChain", null);
+      logNote(
+        `Stop review gate reached its cap of ${MAX_CONSECUTIVE_BLOCKS} consecutive blocks and is letting the session stop. Unresolved review feedback: ${review.reason}`
+      );
+      logNote(runningTaskNote);
+      return;
+    }
+
+    setConfig(workspaceRoot, "stopReviewGateChain", { sessionId, blocks: priorBlocks + 1 });
     emitDecision({
       decision: "block",
       reason: runningTaskNote ? `${runningTaskNote} ${review.reason}` : review.reason
@@ -171,6 +193,9 @@ function main() {
     return;
   }
 
+  if (chain) {
+    setConfig(workspaceRoot, "stopReviewGateChain", null);
+  }
   logNote(runningTaskNote);
 }
 
