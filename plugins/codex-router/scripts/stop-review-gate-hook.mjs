@@ -15,6 +15,25 @@ import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_CONSECUTIVE_BLOCKS = 3;
+const CHAIN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// Copy the per-session chain map, dropping malformed entries and entries from
+// long-gone sessions so the workspace config cannot accumulate stale chains.
+function pruneChains(rawChains) {
+  const chains = {};
+  if (!rawChains || typeof rawChains !== "object") {
+    return chains;
+  }
+  const cutoff = Date.now() - CHAIN_MAX_AGE_MS;
+  for (const [key, entry] of Object.entries(rawChains)) {
+    const blocks = Number(entry?.blocks);
+    const updatedAt = Date.parse(entry?.updatedAt ?? "");
+    if (Number.isFinite(blocks) && blocks > 0 && Number.isFinite(updatedAt) && updatedAt >= cutoff) {
+      chains[key] = { blocks, updatedAt: entry.updatedAt };
+    }
+  }
+  return chains;
+}
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 
@@ -168,16 +187,17 @@ function main() {
   // chain has blocked and stop blocking after MAX_CONSECUTIVE_BLOCKS so a
   // nitpicking or flaky review can never trap the session in an endless
   // fix-review loop. A fresh stop attempt (stop_hook_active absent) resets
-  // the chain.
-  const sessionId = input.session_id || process.env[SESSION_ID_ENV] || null;
-  const chain = config.stopReviewGateChain;
-  const priorBlocks =
-    input.stop_hook_active && chain && chain.sessionId === sessionId ? Number(chain.blocks) || 0 : 0;
+  // the chain. Chains are kept in a per-session map so concurrent sessions in
+  // the same workspace cannot reset each other's counters.
+  const sessionId = input.session_id || process.env[SESSION_ID_ENV] || "unknown-session";
+  const chains = pruneChains(config.stopReviewGateChains);
+  const priorBlocks = input.stop_hook_active ? Number(chains[sessionId]?.blocks) || 0 : 0;
 
   const review = runStopReview(cwd, input);
   if (!review.ok) {
     if (input.stop_hook_active && priorBlocks >= MAX_CONSECUTIVE_BLOCKS) {
-      setConfig(workspaceRoot, "stopReviewGateChain", null);
+      delete chains[sessionId];
+      setConfig(workspaceRoot, "stopReviewGateChains", chains);
       logNote(
         `Stop review gate reached its cap of ${MAX_CONSECUTIVE_BLOCKS} consecutive blocks and is letting the session stop. Unresolved review feedback: ${review.reason}`
       );
@@ -185,7 +205,8 @@ function main() {
       return;
     }
 
-    setConfig(workspaceRoot, "stopReviewGateChain", { sessionId, blocks: priorBlocks + 1 });
+    chains[sessionId] = { blocks: priorBlocks + 1, updatedAt: new Date().toISOString() };
+    setConfig(workspaceRoot, "stopReviewGateChains", chains);
     emitDecision({
       decision: "block",
       reason: runningTaskNote ? `${runningTaskNote} ${review.reason}` : review.reason
@@ -193,8 +214,9 @@ function main() {
     return;
   }
 
-  if (chain) {
-    setConfig(workspaceRoot, "stopReviewGateChain", null);
+  if (chains[sessionId]) {
+    delete chains[sessionId];
+    setConfig(workspaceRoot, "stopReviewGateChains", chains);
   }
   logNote(runningTaskNote);
 }

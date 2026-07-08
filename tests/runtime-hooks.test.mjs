@@ -547,3 +547,50 @@ test("stop hook stops blocking after three consecutive blocks in one stop chain"
   assert.equal(fresh.status, 0, fresh.stderr);
   assert.equal(JSON.parse(fresh.stdout).decision, "block");
 });
+
+test("stop hook tracks block chains per session so concurrent sessions do not reset each other", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(setup.status, 0, setup.stderr);
+
+  const hookInput = (sessionId, stopHookActive) =>
+    JSON.stringify({
+      cwd: repo,
+      session_id: sessionId,
+      stop_hook_active: stopHookActive,
+      last_assistant_message: "I completed the refactor."
+    });
+
+  const runHook = (sessionId, stopHookActive) =>
+    run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(sessionId, stopHookActive) });
+
+  // Session A blocks three times; session B's interleaved blocks must not
+  // reset A's chain.
+  assert.equal(JSON.parse(runHook("sess-a", false).stdout).decision, "block");
+  assert.equal(JSON.parse(runHook("sess-b", false).stdout).decision, "block");
+  assert.equal(JSON.parse(runHook("sess-a", true).stdout).decision, "block");
+  assert.equal(JSON.parse(runHook("sess-b", true).stdout).decision, "block");
+  assert.equal(JSON.parse(runHook("sess-a", true).stdout).decision, "block");
+
+  // Session A's fourth attempt hits its own cap despite B's interleaving.
+  const cappedA = runHook("sess-a", true);
+  assert.equal(cappedA.stdout.trim(), "");
+  assert.match(cappedA.stderr, /reached its cap of 3 consecutive blocks/i);
+
+  // Session B is unaffected by A's cap: it has blocked twice, so it blocks
+  // once more before hitting its own cap.
+  assert.equal(JSON.parse(runHook("sess-b", true).stdout).decision, "block");
+  const cappedB = runHook("sess-b", true);
+  assert.equal(cappedB.stdout.trim(), "");
+  assert.match(cappedB.stderr, /reached its cap of 3 consecutive blocks/i);
+});
