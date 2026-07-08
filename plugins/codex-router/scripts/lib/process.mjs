@@ -143,13 +143,33 @@ export async function terminateWithEscalation(pid, options = {}) {
   await new Promise((resolve) => setTimeout(resolve, graceMs));
 
   const killImpl = options.killImpl ?? process.kill.bind(process);
-  try {
-    killImpl(pid, 0);
-  } catch {
+  const platform = options.platform ?? process.platform;
+
+  // Probe the whole process group, not just the leader: the leader can exit
+  // while children that ignored SIGTERM survive in the group, and returning
+  // early here would skip the SIGKILL they still need. EPERM means something
+  // in the group is alive even though we cannot signal it for the probe.
+  let survivors = false;
+  if (platform !== "win32") {
+    try {
+      killImpl(-pid, 0);
+      survivors = true;
+    } catch (probeError) {
+      survivors = probeError?.code === "EPERM";
+    }
+  }
+  if (!survivors) {
+    try {
+      killImpl(pid, 0);
+      survivors = true;
+    } catch (probeError) {
+      survivors = probeError?.code === "EPERM";
+    }
+  }
+  if (!survivors) {
     return result;
   }
 
-  const platform = options.platform ?? process.platform;
   if (platform === "win32") {
     return { ...result, escalated: true };
   }
