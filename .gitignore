@@ -147,6 +147,7 @@ vite.config.ts.timestamp-*
 .vite/
 
 output/
+plugins/codex/
 plugins/codex-router/.generated/
 
 # Internal planning artifacts
