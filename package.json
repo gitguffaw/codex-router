@@ -8,7 +8,7 @@
   "homepage": "https://github.com/gitguffaw/codex-router#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gitguffaw/codex-router.git"
+    "url": "git+https://github.com/gitguffaw/codex-router.git"
   },
   "bugs": {
     "url": "https://github.com/gitguffaw/codex-router/issues"
