@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0
+
+- Serialize all state.json writers behind an identity-based lock: the lock record carries pid + process start time created atomically via hardlink, a live holder with matching identity is never stolen, dead or PID-reused holders are reclaimed immediately, and only malformed lock records with no identifiable owner age out. Writes now go through temp-file + rename so a crashed writer can no longer leave a torn state file.
+- Reject a captured Codex turn when the app-server process or broker connection dies mid-turn instead of hanging forever, by racing the turn completion against the client's exit promise.
+- Escalate `/codex-router:cancel` from SIGTERM to SIGKILL through `terminateWithEscalation()` so cancelled jobs that ignore SIGTERM are still terminated.
+- Route the SessionEnd job cleanup through the locked `updateState` path so ending one Claude session can no longer drop jobs enqueued concurrently by another session.
+- Make the test suite hermetic inside Claude Code and Codex sessions by scrubbing `CLAUDE*`/`CODEX*` environment variables at test-helper load, and add lock-contention regression tests (half-written lock, live holder, dead holder, PID reuse, unverifiable identity).
+- Split the monolithic runtime test file into five files so `node --test` parallelizes across processes, roughly halving suite wall-clock time.
+- Add ESLint (flat config) with a `npm run lint` script, expand TypeScript checking to every runtime module, and fix the issues both surfaced.
+- Run CI on pushes to the default branch and manual dispatch in addition to pull requests, across a Node 18.18/22 matrix, with the Codex CLI install pinned to an exact version so upstream releases cannot break builds.
+
 ## 2.2.0
 
 - Prevent orphaned broker processes from accumulating when the SessionEnd hook does not fire (crash, force-kill, or abrupt session termination).

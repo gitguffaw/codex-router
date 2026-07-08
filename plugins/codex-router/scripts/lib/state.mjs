@@ -1,16 +1,21 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { getProcessStartTime } from "./process.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-router");
 const STATE_FILE_NAME = "state.json";
+const STATE_LOCK_FILE_NAME = "state.lock";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
+const STATE_LOCK_TIMEOUT_MS = 2000;
+const STATE_LOCK_RETRY_MS = 25;
+const STATE_LOCK_STALE_MS = 10000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -89,7 +94,145 @@ function removeFileIfExists(filePath) {
   }
 }
 
-export function saveState(cwd, state) {
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireStateLock(cwd) {
+  const lockFile = path.join(resolveStateDir(cwd), STATE_LOCK_FILE_NAME);
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 });
+
+  // The lock must appear with its full ownership record in one atomic step, so a
+  // contender can never observe a half-written lock and reclaim it while the
+  // owner is still acquiring. Hardlinking a pre-written owner file gives us
+  // atomic create-with-content; linkSync fails with EEXIST when contended.
+  // The record carries pid + process start time so reclaim can distinguish the
+  // original holder from an unrelated process that reused its PID.
+  const nonce = randomBytes(8).toString("hex");
+  const token = JSON.stringify({
+    pid: process.pid,
+    startTime: getProcessStartTime(process.pid),
+    nonce
+  });
+  const ownerFile = `${lockFile}.owner-${process.pid}-${nonce}`;
+  fs.writeFileSync(ownerFile, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+
+  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
+  try {
+    for (;;) {
+      try {
+        fs.linkSync(ownerFile, lockFile);
+        return { lockFile, ownerFile, token };
+      } catch (error) {
+        if (error?.code !== "EEXIST") {
+          throw error;
+        }
+      }
+
+      let holderToken = null;
+      let holderMtimeMs = Number.POSITIVE_INFINITY;
+      try {
+        holderToken = fs.readFileSync(lockFile, "utf8").trim();
+        holderMtimeMs = fs.statSync(lockFile).mtimeMs;
+      } catch {
+        // The lock vanished between linkSync and the probe — retry immediately.
+        continue;
+      }
+
+      const aged = Date.now() - holderMtimeMs > STATE_LOCK_STALE_MS;
+      let holder = null;
+      try {
+        holder = JSON.parse(holderToken);
+      } catch {
+        holder = null;
+      }
+
+      let stale;
+      if (!holder || !Number.isFinite(holder.pid) || holder.pid <= 0) {
+        // Malformed or legacy lock: reclaim only after it has sat unchanged
+        // past the stale threshold.
+        stale = aged;
+      } else {
+        let holderDead = false;
+        try {
+          process.kill(holder.pid, 0);
+        } catch (probeError) {
+          holderDead = probeError?.code !== "EPERM";
+        }
+        if (holderDead) {
+          stale = true;
+        } else {
+          // The PID exists, but it may be an unrelated process that reused it.
+          // Compare recorded vs current process start time: a mismatch proves
+          // reuse (reclaim now); a match proves the original holder is alive
+          // (never steal, no matter how old the lock is). When identity cannot
+          // be verified on either side, never steal a possibly-live holder —
+          // failing the acquisition loudly is recoverable, silently corrupting
+          // state under a live writer is not.
+          const currentStartTime = getProcessStartTime(holder.pid);
+          if (holder.startTime && currentStartTime) {
+            stale = holder.startTime !== currentStartTime;
+          } else {
+            stale = false;
+          }
+        }
+      }
+
+      if (stale) {
+        // Re-verify the lock is still the one we probed before reclaiming, so
+        // we never delete a lock a different contender just acquired.
+        try {
+          if (fs.readFileSync(lockFile, "utf8").trim() === holderToken) {
+            fs.unlinkSync(lockFile);
+          }
+        } catch {
+          // Lock changed or vanished — loop and re-evaluate.
+        }
+        continue;
+      }
+
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for the Codex Router state lock.");
+      }
+      sleepSync(STATE_LOCK_RETRY_MS);
+    }
+  } catch (error) {
+    try {
+      fs.unlinkSync(ownerFile);
+    } catch {
+      // Best-effort cleanup.
+    }
+    throw error;
+  }
+}
+
+function releaseStateLock(lock) {
+  try {
+    // Only remove the lock if we still own it; a stale-reclaim by another
+    // process must never be compounded by us deleting their lock.
+    if (fs.readFileSync(lock.lockFile, "utf8").trim() === lock.token) {
+      fs.unlinkSync(lock.lockFile);
+    }
+  } catch {
+    // Already removed or reclaimed.
+  }
+  try {
+    fs.unlinkSync(lock.ownerFile);
+  } catch {
+    // Already removed.
+  }
+}
+
+function withStateLock(cwd, fn) {
+  const lock = acquireStateLock(cwd);
+  try {
+    return fn();
+  } finally {
+    releaseStateLock(lock);
+  }
+}
+
+function saveStateLocked(cwd, state) {
   const previousJobs = loadState(cwd).jobs;
   ensureStateDir(cwd);
   const nextJobs = pruneJobs(state.jobs ?? []);
@@ -111,14 +254,23 @@ export function saveState(cwd, state) {
     removeFileIfExists(job.logFile);
   }
 
-  fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  const stateFile = resolveStateFile(cwd);
+  const tempFile = `${stateFile}.tmp-${process.pid}`;
+  fs.writeFileSync(tempFile, `${JSON.stringify(nextState, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(tempFile, stateFile);
   return nextState;
 }
 
+export function saveState(cwd, state) {
+  return withStateLock(cwd, () => saveStateLocked(cwd, state));
+}
+
 export function updateState(cwd, mutate) {
-  const state = loadState(cwd);
-  mutate(state);
-  return saveState(cwd, state);
+  return withStateLock(cwd, () => {
+    const state = loadState(cwd);
+    mutate(state);
+    return saveStateLocked(cwd, state);
+  });
 }
 
 export function generateJobId(prefix = "job") {

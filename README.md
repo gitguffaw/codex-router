@@ -4,13 +4,14 @@ Use Codex from Claude Code or Antigravity (`agy`) with policy-backed routing, mo
 
 Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace for Claude Code and ships an AGY skill bundle for Antigravity. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
-## What's New In 2.2.0
+## What's New In 2.3.0
 
-- The broker process now self-terminates after 10 minutes of idle time when no clients are connected, preventing orphaned process accumulation when Claude sessions end without firing the SessionEnd hook.
-- Broker session state records the process start time alongside the PID, detecting stale entries that point at recycled OS PIDs.
-- An exclusive lock file prevents concurrent callers from racing to spawn duplicate brokers for the same workspace.
-- App-server cleanup now escalates from SIGTERM to SIGKILL after a grace period, ensuring processes actually terminate.
-- See [2.1.1](./plugins/codex-router/CHANGELOG.md#211) and [2.1.0](./plugins/codex-router/CHANGELOG.md#210) for earlier changes including focused review promotion, live model catalog, and AGY parity.
+- Job state writes are now serialized behind an identity-based lock (PID + process start time, created atomically) with temp-file + rename writes, so concurrent Claude sessions can no longer clobber each other's jobs or leave a torn `state.json`.
+- A Codex app-server or broker that dies mid-turn now fails the command immediately with a clear error instead of hanging it forever.
+- `/codex-router:cancel` escalates from SIGTERM to SIGKILL after a grace period, so cancelled jobs that ignore SIGTERM are still terminated.
+- The test suite is hermetic inside Claude Code and Codex sessions, runs roughly twice as fast, and the repo now lints with ESLint and type-checks every runtime module.
+- CI runs on default-branch pushes and manual dispatch across a Node 18.18/22 matrix, with the Codex CLI install pinned so upstream releases cannot break builds.
+- See [2.2.0](./plugins/codex-router/CHANGELOG.md#220) and [2.1.1](./plugins/codex-router/CHANGELOG.md#211) for earlier changes including broker orphan prevention and focused review promotion.
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
 

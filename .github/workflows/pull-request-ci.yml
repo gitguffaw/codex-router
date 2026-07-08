@@ -2,15 +2,24 @@ name: Pull Request CI
 
 on:
   pull_request:
+  push:
+    branches: [codex/router-v1]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   ci:
-    name: CI
+    name: CI (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18.18 is the minimum claimed by the package.json engines field.
+        node-version: ['18.18', '22']
 
     steps:
       - name: Check out repository
@@ -19,14 +28,19 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
       - name: Install Codex CLI
-        run: npm install -g @openai/codex
+        # Pinned: prebuild regenerates types from this CLI, so an unpinned
+        # install can break the build on upstream releases. Bump deliberately.
+        run: npm install -g @openai/codex@0.142.5
+
+      - name: Run lint
+        run: npm run lint
 
       - name: Run test suite
         run: npm test

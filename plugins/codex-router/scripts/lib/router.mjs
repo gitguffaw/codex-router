@@ -101,6 +101,19 @@ function buildExecPrompt(prompt, modifiers) {
   return parts.join("\n");
 }
 
+/**
+ * @param {{
+ *   mode: string,
+ *   prompt: string,
+ *   options?: { search?: boolean, docs?: boolean, tool?: string, parallel?: boolean },
+ *   modelControls?: {
+ *     model?: string | null,
+ *     effort?: string | null,
+ *     serviceTier?: string | null,
+ *     configOverrides?: Record<string, unknown>
+ *   }
+ * }} request
+ */
 export function buildRouterRequest({ mode, prompt, options = {}, modelControls = {} }) {
   const config = MODE_CONFIG[mode];
   if (!config) {

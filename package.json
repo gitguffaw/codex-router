@@ -1,6 +1,6 @@
 {
   "name": "@compound/codex-router-plugin-cc",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "description": "Route Claude Code and AGY work through Codex with live model discovery, policy-backed modes, and reliable job handling.",
@@ -31,10 +31,14 @@
     "check-version": "node scripts/bump-version.mjs --check",
     "prebuild": "mkdir -p plugins/codex-router/.generated/app-server-types && codex app-server generate-ts --out plugins/codex-router/.generated/app-server-types",
     "build": "tsc -p tsconfig.app-server.json",
+    "lint": "eslint .",
     "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^25.5.0",
+    "eslint": "^9.39.4",
+    "globals": "^15.15.0",
     "typescript": "^6.0.2"
   }
 }

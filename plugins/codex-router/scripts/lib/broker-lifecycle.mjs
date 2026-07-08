@@ -6,28 +6,13 @@ import process from "node:process";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mjs";
+import { getProcessStartTime } from "./process.mjs";
 import { resolveStateDir } from "./state.mjs";
 
 export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
 export const LOG_FILE_ENV = "CODEX_COMPANION_APP_SERVER_LOG_FILE";
 const BROKER_STATE_FILE = "broker.json";
 const BROKER_LOCK_FILE = "broker.lock";
-
-function getProcessStartTime(pid) {
-  if (process.platform === "win32" || !Number.isFinite(pid)) {
-    return null;
-  }
-  try {
-    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 2000
-    });
-    return result.status === 0 ? result.stdout.trim() || null : null;
-  } catch {
-    return null;
-  }
-}
 
 function processMatchesRecord(pid, recordedStartTime) {
   if (!recordedStartTime) {

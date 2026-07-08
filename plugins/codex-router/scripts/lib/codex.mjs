@@ -669,7 +669,15 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       completeTurn(state, response.turn);
     }
 
-    return await state.completion;
+    // handleExit only rejects in-flight requests; once turn/start has resolved,
+    // nothing else settles state.completion if the codex process or broker dies
+    // mid-turn, so race the completion against the client's exit promise.
+    return await new Promise((resolve, reject) => {
+      state.completion.then(resolve, reject);
+      client.exitPromise?.then(() => {
+        reject(client.exitError ?? new Error("codex app-server exited before the turn completed."));
+      });
+    });
   } finally {
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);

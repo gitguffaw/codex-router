@@ -11,7 +11,7 @@ import {
   resolveResultJob,
   sortJobsNewestFirst
 } from "./job-control.mjs";
-import { terminateProcessTree } from "./process.mjs";
+import { terminateWithEscalation } from "./process.mjs";
 import {
   renderCancelReport,
   renderJobStatusReport,
@@ -210,7 +210,7 @@ export async function handleCancelCommand(argv) {
     );
   }
 
-  terminateProcessTree(job.pid ?? Number.NaN);
+  await terminateWithEscalation(job.pid ?? Number.NaN);
   appendLogLine(job.logFile, "Cancelled by user.");
 
   const completedAt = nowIso();

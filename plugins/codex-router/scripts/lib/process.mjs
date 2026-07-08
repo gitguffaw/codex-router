@@ -1,6 +1,22 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 
+export function getProcessStartTime(pid) {
+  if (process.platform === "win32" || !Number.isFinite(pid)) {
+    return null;
+  }
+  try {
+    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 2000
+    });
+    return result.status === 0 ? result.stdout.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
 export function runCommand(command, args = [], options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
