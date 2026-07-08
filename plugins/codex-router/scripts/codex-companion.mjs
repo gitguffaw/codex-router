@@ -34,7 +34,7 @@ import {
   handleTaskResumeCandidateCommand
 } from "./lib/job-commands.mjs";
 import { resolveModelControls } from "./lib/model-resolution.mjs";
-import { binaryAvailable } from "./lib/process.mjs";
+import { binaryAvailable, getProcessStartTime } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { buildRouterRequest } from "./lib/router.mjs";
 import {
@@ -740,6 +740,7 @@ function enqueueBackgroundTask(cwd, job, request) {
     status: "queued",
     phase: "queued",
     pid: child.pid ?? null,
+    processStartTime: child.pid ? getProcessStartTime(child.pid) : null,
     logFile,
     request
   };

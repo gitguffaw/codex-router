@@ -28,6 +28,29 @@ async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
   throw new Error("Timed out waiting for condition.");
 }
 
+function runStopHookAsync(cwd, env, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", [STOP_HOOK], {
+      cwd,
+      env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status, signal) => {
+      resolve({ status, signal, stdout, stderr });
+    });
+    child.stdin.end(input);
+  });
+}
+
 test("session end fully cleans up jobs for the ending session", async (t) => {
   const repo = makeTempDir();
   initGitRepo(repo);
@@ -593,4 +616,42 @@ test("stop hook tracks block chains per session so concurrent sessions do not re
   const cappedB = runHook("sess-b", true);
   assert.equal(cappedB.stdout.trim(), "");
   assert.match(cappedB.stderr, /reached its cap of 3 consecutive blocks/i);
+});
+
+test("stop hook preserves concurrent per-session chain updates after delayed reviews", async () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const env = buildEnv(binDir);
+  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
+    cwd: repo,
+    env
+  });
+  assert.equal(setup.status, 0, setup.stderr);
+
+  const hookInput = (sessionId) =>
+    JSON.stringify({
+      cwd: repo,
+      session_id: sessionId,
+      last_assistant_message: `I completed the refactor for ${sessionId}.`
+    });
+
+  const [first, second] = await Promise.all([
+    runStopHookAsync(repo, env, hookInput("sess-a")),
+    runStopHookAsync(repo, env, hookInput("sess-b"))
+  ]);
+
+  for (const result of [first, second]) {
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).decision, "block");
+  }
+
+  const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+  assert.equal(state.config.stopReviewGateChains["sess-a"].blocks, 1);
+  assert.equal(state.config.stopReviewGateChains["sess-b"].blocks, 1);
 });

@@ -4,14 +4,12 @@ Use Codex from Claude Code or Antigravity (`agy`) with policy-backed routing, mo
 
 Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace for Claude Code and ships an AGY skill bundle for Antigravity. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
-## What's New In 2.3.0
+## What's New In 2.3.1
 
-- Job state writes are now serialized behind an identity-based lock (PID + process start time, created atomically) with temp-file + rename writes, so concurrent Claude sessions can no longer clobber each other's jobs or leave a torn `state.json`.
-- A Codex app-server or broker that dies mid-turn now fails the command immediately with a clear error instead of hanging it forever.
-- `/codex-router:cancel` escalates from SIGTERM to SIGKILL after a grace period, so cancelled jobs that ignore SIGTERM are still terminated.
-- The test suite is hermetic inside Claude Code and Codex sessions, runs roughly twice as fast, and the repo now lints with ESLint and type-checks every runtime module.
-- CI runs on default-branch pushes and manual dispatch across a Node 18.18/22 matrix, with the Codex CLI install pinned so upstream releases cannot break builds.
-- See [2.2.0](./plugins/codex-router/CHANGELOG.md#220) and [2.1.1](./plugins/codex-router/CHANGELOG.md#211) for earlier changes including broker orphan prevention and focused review promotion.
+- Cancellation now escalates SIGKILL only when the recorded worker identity still matches, so verified survivors are force-killed without risking a recycled PID or process group.
+- The stop-time review gate is bounded: after three consecutive blocks in one stop chain it lets the session stop and reports the unresolved findings as a note, and chains are tracked per session so concurrent sessions cannot reset each other's counters.
+- Test runs no longer leave dozens of idle broker processes behind; brokers accept `CODEX_COMPANION_BROKER_IDLE_TIMEOUT_MS` and the suite sets it to two seconds.
+- See [2.3.0](./plugins/codex-router/CHANGELOG.md#230) for the identity-based state locking, mid-turn death detection, hermetic test, and CI hardening work this builds on.
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
 

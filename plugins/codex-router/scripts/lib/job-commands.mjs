@@ -210,7 +210,9 @@ export async function handleCancelCommand(argv) {
     );
   }
 
-  await terminateWithEscalation(job.pid ?? Number.NaN);
+  await terminateWithEscalation(job.pid ?? Number.NaN, {
+    processStartTime: existing.processStartTime ?? job.processStartTime ?? null
+  });
   appendLogLine(job.logFile, "Cancelled by user.");
 
   const completedAt = nowIso();

@@ -54,18 +54,18 @@ test("terminateProcessTree treats missing Windows processes as already stopped",
   assert.match(outcome.result.stdout, /not found/i);
 });
 
-test("terminateWithEscalation SIGKILLs surviving group children after the leader exits", async () => {
+test("terminateWithEscalation SIGKILLs a surviving group when the leader identity still matches", async () => {
   const signals = [];
   const outcome = await terminateWithEscalation(1234, {
     platform: "linux",
     graceMs: 0,
+    processStartTime: "same-process",
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return "same-process";
+    },
     killImpl(target, signal) {
       signals.push([target, signal]);
-      if (signal === 0 && target === 1234) {
-        const error = new Error("leader already exited");
-        error.code = "ESRCH";
-        throw error;
-      }
       // Group probe (-1234, 0), group SIGTERM, and group SIGKILL all succeed.
     }
   });
@@ -79,6 +79,10 @@ test("terminateWithEscalation does not escalate when the whole group is gone", a
   const outcome = await terminateWithEscalation(1234, {
     platform: "linux",
     graceMs: 0,
+    processStartTime: "same-process",
+    getProcessStartTimeImpl() {
+      return "same-process";
+    },
     killImpl(target, signal) {
       signals.push([target, signal]);
       if (signal === 0) {
@@ -91,4 +95,44 @@ test("terminateWithEscalation does not escalate when the whole group is gone", a
 
   assert.equal(outcome.escalated, undefined);
   assert.equal(signals.some(([, signal]) => signal === "SIGKILL"), false);
+});
+
+test("terminateWithEscalation skips SIGKILL when the stored leader identity no longer matches", async () => {
+  const signals = [];
+  const outcome = await terminateWithEscalation(1234, {
+    platform: "linux",
+    graceMs: 0,
+    processStartTime: "original-process",
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return "reused-process";
+    },
+    killImpl(target, signal) {
+      signals.push([target, signal]);
+    }
+  });
+
+  assert.equal(outcome.escalated, undefined);
+  assert.equal(outcome.escalationSkipped, "unverified-process-identity");
+  assert.deepEqual(signals, [[-1234, "SIGTERM"]]);
+});
+
+test("terminateWithEscalation skips SIGKILL when the leader exited before escalation", async () => {
+  const signals = [];
+  const outcome = await terminateWithEscalation(1234, {
+    platform: "linux",
+    graceMs: 0,
+    processStartTime: "original-process",
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return null;
+    },
+    killImpl(target, signal) {
+      signals.push([target, signal]);
+    }
+  });
+
+  assert.equal(outcome.escalated, undefined);
+  assert.equal(outcome.escalationSkipped, "unverified-process-identity");
+  assert.deepEqual(signals, [[-1234, "SIGTERM"]]);
 });

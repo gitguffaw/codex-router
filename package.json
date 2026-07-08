@@ -1,6 +1,6 @@
 {
   "name": "@compound/codex-router-plugin-cc",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "type": "module",
   "description": "Route Claude Code and AGY work through Codex with live model discovery, policy-backed modes, and reliable job handling.",

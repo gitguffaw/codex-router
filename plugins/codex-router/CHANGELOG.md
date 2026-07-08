@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.1
+
+- Escalate cancellation to SIGKILL only when the recorded worker PID still has the same process start time, force-killing verified survivors without targeting a recycled PID or process group.
+- Bound the stop-time review gate: honor `stop_hook_active` and cap consecutive blocks at three per stop chain, letting the session stop with the unresolved findings downgraded to a note instead of looping forever. Chains are updated from fresh locked state per session so concurrent sessions in one workspace cannot reset or overwrite each other's counters.
+- Let short-lived callers shorten the broker idle timeout via `CODEX_COMPANION_BROKER_IDLE_TIMEOUT_MS`; the test suite sets it to two seconds so `npm test` runs no longer leave dozens of broker and fixture processes alive for the ten-minute production default.
+
 ## 2.3.0
 
 - Serialize all state.json writers behind an identity-based lock: the lock record carries pid + process start time created atomically via hardlink, a live holder with matching identity is never stolen, dead or PID-reused holders are reclaimed immediately, and only malformed lock records with no identifiable owner age out. Writes now go through temp-file + rename so a crashed writer can no longer leave a torn state file.

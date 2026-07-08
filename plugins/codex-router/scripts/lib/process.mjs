@@ -144,13 +144,27 @@ export async function terminateWithEscalation(pid, options = {}) {
 
   const killImpl = options.killImpl ?? process.kill.bind(process);
   const platform = options.platform ?? process.platform;
+  const expectedStartTime = options.processStartTime ?? options.expectedStartTime ?? null;
+  const getProcessStartTimeImpl = options.getProcessStartTimeImpl ?? getProcessStartTime;
 
-  // Probe the whole process group, not just the leader: the leader can exit
-  // while children that ignored SIGTERM survive in the group, and returning
-  // early here would skip the SIGKILL they still need. EPERM means something
-  // in the group is alive even though we cannot signal it for the probe.
+  if (platform === "win32") {
+    try {
+      killImpl(pid, 0);
+      return { ...result, escalated: true };
+    } catch (probeError) {
+      return probeError?.code === "EPERM" ? { ...result, escalated: true } : result;
+    }
+  }
+
+  const currentStartTime = expectedStartTime ? getProcessStartTimeImpl(pid) : null;
+  if (!expectedStartTime || !currentStartTime || currentStartTime !== expectedStartTime) {
+    return { ...result, escalationSkipped: "unverified-process-identity" };
+  }
+
+  // Only escalate targets whose leader still matches the recorded worker
+  // identity. A recycled numeric PID/PGID cannot prove ownership.
   let survivors = false;
-  if (platform !== "win32") {
+  if (result.method === "process-group") {
     try {
       killImpl(-pid, 0);
       survivors = true;
@@ -158,7 +172,7 @@ export async function terminateWithEscalation(pid, options = {}) {
       survivors = probeError?.code === "EPERM";
     }
   }
-  if (!survivors) {
+  if (!survivors && result.method === "process") {
     try {
       killImpl(pid, 0);
       survivors = true;
@@ -170,18 +184,14 @@ export async function terminateWithEscalation(pid, options = {}) {
     return result;
   }
 
-  if (platform === "win32") {
-    return { ...result, escalated: true };
-  }
-
   try {
-    killImpl(-pid, "SIGKILL");
-  } catch {
-    try {
+    if (result.method === "process-group") {
+      killImpl(-pid, "SIGKILL");
+    } else {
       killImpl(pid, "SIGKILL");
-    } catch {
-      // Process may have exited between the liveness check and SIGKILL.
     }
+  } catch {
+    // Process may have exited between the liveness check and SIGKILL.
   }
   return { ...result, escalated: true };
 }
