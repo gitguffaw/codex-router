@@ -398,6 +398,163 @@ test("status preserves adversarial review kind labels", () => {
   assert.match(result.stdout, /Codex session ID: thr_adv_done/);
 });
 
+function seedRunningJob(workspace, job) {
+  const stateDir = resolveStateDir(workspace);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+
+  const logFile = path.join(jobsDir, `${job.id}.log`);
+  fs.writeFileSync(logFile, "[2026-03-18T15:30:00.000Z] Starting Codex Task.\n", "utf8");
+
+  const record = {
+    status: "running",
+    title: "Codex Task",
+    jobClass: "task",
+    summary: "Investigate flaky test",
+    logFile,
+    createdAt: "2026-03-18T15:30:00.000Z",
+    startedAt: "2026-03-18T15:30:01.000Z",
+    updatedAt: "2026-03-18T15:30:02.000Z",
+    ...job
+  };
+
+  fs.writeFileSync(path.join(jobsDir, `${job.id}.json`), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  fs.writeFileSync(
+    path.join(stateDir, "state.json"),
+    `${JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [record] }, null, 2)}\n`,
+    "utf8"
+  );
+
+  return { stateDir, jobsDir, logFile };
+}
+
+function spawnDeadPid() {
+  const child = run("node", ["-e", "process.exit(0)"]);
+  assert.equal(child.status, 0);
+  assert.equal(Number.isFinite(child.pid), true);
+  return child.pid;
+}
+
+test("status marks a running job failed when its runtime process is gone", () => {
+  const workspace = makeTempDir();
+  const { stateDir, jobsDir, logFile } = seedRunningJob(workspace, {
+    id: "task-orphan",
+    pid: spawnDeadPid()
+  });
+
+  const result = run("node", [SCRIPT, "status", "task-orphan", "--json"], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.job.status, "failed");
+  assert.equal(payload.job.pid, null);
+  assert.match(payload.job.errorMessage, /orphan detection/);
+
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(state.jobs[0].status, "failed");
+  assert.match(state.jobs[0].errorMessage, /orphan detection/);
+
+  const storedJob = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-orphan.json"), "utf8"));
+  assert.equal(storedJob.status, "failed");
+  assert.match(fs.readFileSync(logFile, "utf8"), /orphan detection/);
+});
+
+test("status marks a running job failed when its pid was recycled by another process", () => {
+  const workspace = makeTempDir();
+  const { stateDir } = seedRunningJob(workspace, {
+    id: "task-recycled",
+    pid: process.pid,
+    processStartTime: "Thu Jan  1 00:00:00 1970"
+  });
+
+  const result = run("node", [SCRIPT, "status", "task-recycled", "--json"], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.job.status, "failed");
+  assert.match(payload.job.errorMessage, /orphan detection/);
+
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(state.jobs[0].status, "failed");
+});
+
+test("orphan detection adopts a completed job file instead of marking the job failed", () => {
+  const workspace = makeTempDir();
+  const { stateDir, jobsDir } = seedRunningJob(workspace, {
+    id: "task-done-late",
+    pid: spawnDeadPid()
+  });
+
+  // The runtime completed the job and exited, but its state-index update never
+  // landed: the job file carries the final result while state.json still says
+  // "running".
+  fs.writeFileSync(
+    path.join(jobsDir, "task-done-late.json"),
+    `${JSON.stringify(
+      {
+        id: "task-done-late",
+        status: "completed",
+        phase: "done",
+        title: "Codex Task",
+        threadId: "thr_late",
+        completedAt: "2026-03-18T15:32:00.000Z",
+        rendered: "All done.\n"
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const result = run("node", [SCRIPT, "status", "task-done-late", "--json"], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.job.status, "completed");
+  assert.equal(payload.job.threadId, "thr_late");
+  assert.equal(payload.job.errorMessage ?? null, null);
+
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(state.jobs[0].status, "completed");
+  assert.equal(state.jobs[0].completedAt, "2026-03-18T15:32:00.000Z");
+
+  const storedJob = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-done-late.json"), "utf8"));
+  assert.equal(storedJob.status, "completed");
+  assert.equal(storedJob.rendered, "All done.\n");
+});
+
+test("status leaves a running job untouched while its runtime process is alive", () => {
+  const workspace = makeTempDir();
+  const { stateDir } = seedRunningJob(workspace, {
+    id: "task-alive",
+    pid: process.pid
+  });
+
+  const result = run("node", [SCRIPT, "status", "task-alive", "--json"], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.job.status, "running");
+
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(state.jobs[0].status, "running");
+});
+
+test("result surfaces the failure for an orphaned job instead of claiming it is still running", () => {
+  const workspace = makeTempDir();
+  seedRunningJob(workspace, {
+    id: "task-orphan-result",
+    pid: spawnDeadPid()
+  });
+
+  const result = run("node", [SCRIPT, "result", "task-orphan-result", "--json"], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.job.status, "failed");
+  assert.match(payload.storedJob.errorMessage, /orphan detection/);
+});
+
 test("status --wait times out cleanly when a job is still active", () => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);

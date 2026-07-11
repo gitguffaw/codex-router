@@ -18,7 +18,7 @@ import {
   renderStatusReport,
   renderStoredJobResult
 } from "./render.mjs";
-import { listJobs, upsertJob, writeJobFile } from "./state.mjs";
+import { finalizeJob, listJobs } from "./state.mjs";
 import { appendLogLine, isActiveJobStatus, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -216,27 +216,23 @@ export async function handleCancelCommand(argv) {
   appendLogLine(job.logFile, "Cancelled by user.");
 
   const completedAt = nowIso();
-  const nextJob = {
-    ...job,
+  const cancelPatch = {
     status: "cancelled",
     phase: "cancelled",
     pid: null,
     completedAt,
-    errorMessage: "Cancelled by user."
+    errorMessage: "Cancelled by user.",
+    cancelledAt: completedAt
+  };
+  const nextJob = {
+    ...job,
+    ...cancelPatch
   };
 
-  writeJobFile(workspaceRoot, job.id, {
-    ...existing,
-    ...nextJob,
-    cancelledAt: completedAt
-  });
-  upsertJob(workspaceRoot, {
-    id: job.id,
-    status: "cancelled",
-    phase: "cancelled",
-    pid: null,
-    errorMessage: "Cancelled by user.",
-    completedAt
+  // finalizeJob updates the state index and the job file together under the
+  // state lock, so this cannot interleave with orphan reconciliation.
+  finalizeJob(workspaceRoot, job.id, cancelPatch, {
+    storedFallback: { ...existing, ...job }
   });
 
   const payload = {

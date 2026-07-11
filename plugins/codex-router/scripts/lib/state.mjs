@@ -308,6 +308,49 @@ export function listJobs(cwd) {
   return loadState(cwd).jobs;
 }
 
+// Atomically move a job to a terminal state in BOTH the state index and the
+// per-job file. Every terminal transition made by a process that does not own
+// the job (cancel commands, orphan reconciliation) must go through here:
+// deciding from the entry/file and then writing them as separate unlocked
+// steps lets two such writers interleave and split the index from the stored
+// result. `patchOrFn` may be a patch object or a function of ({ entry,
+// stored }) evaluated under the lock; `options.guard` can veto the write from
+// the same under-lock view; `options.storedFallback` seeds the job file when
+// none exists yet. A job with no index entry (e.g. pruned concurrently) is
+// never finalized: patching only the job file would recreate a dangling file
+// the index no longer tracks.
+export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
+  assertValidJobId(jobId);
+  return withStateLock(cwd, () => {
+    const state = loadState(cwd);
+    const index = state.jobs.findIndex((job) => job.id === jobId);
+    const entry = index === -1 ? null : state.jobs[index];
+    const jobFile = resolveJobFile(cwd, jobId);
+    let stored = null;
+    if (fs.existsSync(jobFile)) {
+      try {
+        stored = readJobFile(jobFile);
+      } catch {
+        stored = null;
+      }
+    }
+
+    if (entry == null || (options.guard && !options.guard({ entry, stored }))) {
+      return { applied: false, patch: null, entry, stored };
+    }
+
+    const patch = typeof patchOrFn === "function" ? patchOrFn({ entry, stored }) : patchOrFn;
+    state.jobs[index] = {
+      ...entry,
+      ...patch,
+      updatedAt: nowIso()
+    };
+    writeJobFile(cwd, jobId, { ...(stored ?? options.storedFallback ?? {}), ...patch });
+    saveStateLocked(cwd, state);
+    return { applied: true, patch, entry, stored };
+  });
+}
+
 export function setConfig(cwd, key, value) {
   return updateState(cwd, (state) => {
     state.config = {
