@@ -325,9 +325,13 @@ export function listJobs(cwd) {
 //     late owner completion never overwrites a cancellation, and vice versa).
 //
 // `options.guard` can veto from the same under-lock view; `options.storedFallback`
-// seeds the job file when none exists yet. A job with no index entry (e.g.
-// pruned concurrently) is never finalized: patching only the job file would
-// recreate a dangling file the index no longer tracks.
+// seeds the job file when none exists yet.
+//
+// By default a job with no index entry is NOT written: for cancel/reconcile,
+// patching only the job file would recreate a dangling file the index no longer
+// tracks. The owning runtime is authoritative for its own job, so it passes
+// `options.allowInsert` (with `options.insertBase`) to re-add an entry the
+// pruner evicted mid-run, rather than silently dropping its own result.
 export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
   assertValidJobId(jobId);
   return withStateLock(cwd, () => {
@@ -344,27 +348,38 @@ export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
       }
     }
 
-    if (entry == null || (options.guard && !options.guard({ entry, stored }))) {
-      return { applied: false, patch: null, entry, stored };
+    if ((entry == null && !options.allowInsert) || (options.guard && !options.guard({ entry, stored }))) {
+      return { applied: false, inserted: false, patch: null, entry, stored };
     }
 
     const decision = typeof patchOrFn === "function" ? patchOrFn({ entry, stored }) : patchOrFn;
     if (decision == null) {
-      return { applied: false, patch: null, entry, stored };
+      return { applied: false, inserted: false, patch: null, entry, stored };
     }
 
     const split = decision.$index !== undefined || decision.$file !== undefined;
     const indexPatch = split ? decision.$index ?? {} : decision;
     const filePatch = split ? decision.$file ?? {} : decision;
 
-    state.jobs[index] = {
-      ...entry,
-      ...indexPatch,
-      updatedAt: nowIso()
-    };
+    const timestamp = nowIso();
+    if (index === -1) {
+      state.jobs.unshift({
+        id: jobId,
+        createdAt: timestamp,
+        ...(options.insertBase ?? {}),
+        ...indexPatch,
+        updatedAt: timestamp
+      });
+    } else {
+      state.jobs[index] = {
+        ...entry,
+        ...indexPatch,
+        updatedAt: timestamp
+      };
+    }
     writeJobFile(cwd, jobId, { ...(stored ?? options.storedFallback ?? {}), ...filePatch });
     saveStateLocked(cwd, state);
-    return { applied: true, patch: indexPatch, entry, stored };
+    return { applied: true, inserted: index === -1, patch: indexPatch, entry, stored };
   });
 }
 

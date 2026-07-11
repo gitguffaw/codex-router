@@ -2,7 +2,7 @@ import fs from "node:fs";
 import process from "node:process";
 
 import { getProcessStartTime } from "./process.mjs";
-import { finalizeJob, readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { finalizeJob, resolveJobLogFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 export const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
@@ -150,18 +150,12 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
       return;
     }
 
-    upsertJob(workspaceRoot, patch);
-
-    const jobFile = resolveJobFile(workspaceRoot, jobId);
-    if (!fs.existsSync(jobFile)) {
-      return;
-    }
-
-    const storedJob = readJobFile(jobFile);
-    writeJobFile(workspaceRoot, jobId, {
-      ...storedJob,
-      ...patch
-    });
+    // Commit the progress patch to both records under one lock. Skip a job that
+    // is gone or already terminal so a late progress event can never resurrect
+    // a pruned job or split a record a cancel just finalized.
+    finalizeJob(workspaceRoot, jobId, ({ entry }) =>
+      entry && isActiveJobStatus(entry.status) ? patch : null
+    );
   };
 }
 
@@ -192,8 +186,19 @@ export async function runTrackedJob(job, runner, options = {}) {
     processStartTime: getProcessStartTime(process.pid),
     logFile: options.logFile ?? job.logFile ?? null
   };
-  writeJobFile(job.workspaceRoot, job.id, runningRecord);
-  upsertJob(job.workspaceRoot, runningRecord);
+
+  // Claim the job under the lock. If it was cancelled (or otherwise finalized)
+  // before this runtime got going, back off without running — never resurrect a
+  // terminal job to "running". allowInsert re-adds an entry the pruner evicted.
+  const startOutcome = finalizeJob(
+    job.workspaceRoot,
+    job.id,
+    ({ entry }) => (entry && isTerminalJobStatus(entry.status) ? null : runningRecord),
+    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
+  );
+  if (!startOutcome.applied) {
+    return null;
+  }
 
   try {
     const execution = await runner();
@@ -209,7 +214,10 @@ export async function runTrackedJob(job, runner, options = {}) {
       job.workspaceRoot,
       job.id,
       ({ entry }) => {
-        if (!isActiveJobStatus(entry.status)) {
+        // A missing entry means the pruner evicted this job mid-run; re-insert
+        // our result (allowInsert). A present terminal entry means a cancel
+        // won — back off. Only an active entry is overwritten with completion.
+        if (entry && !isActiveJobStatus(entry.status)) {
           return null;
         }
         return {
@@ -240,7 +248,7 @@ export async function runTrackedJob(job, runner, options = {}) {
           }
         };
       },
-      { storedFallback: runningRecord }
+      { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
     );
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     return execution;
@@ -251,7 +259,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       job.workspaceRoot,
       job.id,
       ({ entry, stored }) => {
-        if (!isActiveJobStatus(entry.status)) {
+        if (entry && !isActiveJobStatus(entry.status)) {
           return null;
         }
         const base = stored ?? runningRecord;
@@ -271,7 +279,7 @@ export async function runTrackedJob(job, runner, options = {}) {
           $index: failurePatch
         };
       },
-      { storedFallback: runningRecord }
+      { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
     );
     throw error;
   }

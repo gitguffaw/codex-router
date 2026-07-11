@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { finalizeJob, listJobs, resolveJobFile, resolveStateDir, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
-import { runTrackedJob } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
+import { createJobProgressUpdater, runTrackedJob } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -624,6 +624,80 @@ test("owner completion commits both records atomically when it wins the race", a
   const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8"));
   assert.equal(stored.status, "completed");
   assert.equal(stored.rendered, "Finished the task.\n");
+});
+
+test("owner refuses to resurrect a job cancelled before it starts", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-precancelled";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "cancelled", phase: "cancelled", title: "Codex Task" }]
+  });
+
+  let ran = false;
+  const result = await runTrackedJob(
+    { id: jobId, workspaceRoot: workspace, title: "Codex Task" },
+    async () => {
+      ran = true;
+      return { exitStatus: 0, payload: {}, rendered: "x\n", summary: "s", warnings: [] };
+    },
+    {}
+  );
+
+  assert.equal(ran, false, "the runner must not execute for an already-cancelled job");
+  assert.equal(result, null);
+  assert.equal(listJobs(workspace).find((entry) => entry.id === jobId).status, "cancelled");
+});
+
+test("owner re-inserts its result when the pruner evicts the job mid-run", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-evicted";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  const runner = async () => {
+    // Simulate the 50-job pruner evicting this job while it runs.
+    saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+    return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "did the work", warnings: [] };
+  };
+
+  await runTrackedJob({ id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" }, runner, {});
+
+  const indexed = listJobs(workspace).find((entry) => entry.id === jobId);
+  assert.ok(indexed, "a completed result must be re-inserted, not silently discarded");
+  assert.equal(indexed.status, "completed");
+  assert.equal(indexed.summary, "did the work");
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8"));
+  assert.equal(stored.rendered, "done\n");
+});
+
+test("progress updates never resurrect or split a cancelled job", () => {
+  const workspace = makeTempDir();
+  const jobId = "task-progress-cancelled";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "cancelled", phase: "cancelled", title: "Codex Task" }]
+  });
+  fs.writeFileSync(
+    resolveJobFile(workspace, jobId),
+    JSON.stringify({ id: jobId, status: "cancelled", phase: "cancelled" }, null, 2),
+    "utf8"
+  );
+
+  const update = createJobProgressUpdater(workspace, jobId);
+  update({ phase: "investigating", threadId: "thr_late" });
+
+  const indexed = listJobs(workspace).find((entry) => entry.id === jobId);
+  assert.equal(indexed.status, "cancelled");
+  assert.equal(indexed.phase, "cancelled", "a late progress event must not overwrite a terminal phase");
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8"));
+  assert.equal(stored.status, "cancelled");
+  assert.equal(stored.phase, "cancelled");
 });
 
 test("status --wait times out cleanly when a job is still active", () => {
