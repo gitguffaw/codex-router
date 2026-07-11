@@ -56,6 +56,8 @@ import {
   createJobProgressUpdater,
   createJobRecord,
   createProgressReporter,
+  isTerminalJobStatus,
+  nowIso,
   runTrackedJob
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
@@ -749,7 +751,10 @@ async function runForegroundCommand(job, runner, options = {}) {
 
 function spawnDetachedTaskWorker(cwd, jobId) {
   const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
-  const child = spawn(process.execPath, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
+  // Test-only escape hatch: overriding the worker binary lets the suite
+  // exercise the spawn-failure path deterministically.
+  const nodeBinary = process.env.CODEX_COMPANION_TASK_WORKER_NODE || process.execPath;
+  const child = spawn(nodeBinary, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
     env: process.env,
     detached: true,
@@ -758,6 +763,28 @@ function spawnDetachedTaskWorker(cwd, jobId) {
   });
   child.unref();
   return child;
+}
+
+function failWorkerLaunch(job, logFile, error) {
+  const message = `Failed to launch the background task worker: ${
+    error instanceof Error ? error.message : String(error)
+  }`;
+  appendLogLine(logFile, message);
+  // First terminal state wins: never overwrite a record another writer (a
+  // cancel, or a worker that somehow started) already finalized or advanced.
+  finalizeJob(job.workspaceRoot, job.id, ({ entry }) => {
+    if (!entry || isTerminalJobStatus(entry.status)) {
+      return null;
+    }
+    return {
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      errorMessage: message,
+      completedAt: nowIso()
+    };
+  });
+  return message;
 }
 
 function enqueueBackgroundTask(cwd, job, request) {
@@ -781,7 +808,21 @@ function enqueueBackgroundTask(cwd, job, request) {
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
 
-  const child = spawnDetachedTaskWorker(cwd, job.id);
+  let child;
+  try {
+    child = spawnDetachedTaskWorker(cwd, job.id);
+  } catch (error) {
+    throw new Error(failWorkerLaunch(job, logFile, error));
+  }
+
+  // Spawning can also fail asynchronously (EAGAIN, EMFILE, missing binary):
+  // the child then has no pid and emits 'error'. Without a listener that
+  // event would crash the CLI and strand the queued record with pid: null —
+  // a shape orphan reconciliation deliberately skips — so the job would read
+  // as active forever. Finalize it to failed instead.
+  child.on("error", (error) => {
+    failWorkerLaunch(job, logFile, error);
+  });
 
   // Record the worker pid so a cancel can signal a still-queued worker, but only
   // while the job is still queued: finalizeJob vetoes if the worker already

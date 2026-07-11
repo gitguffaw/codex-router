@@ -233,6 +233,40 @@ test("task --background persists the request payload before the worker can read 
   assert.equal(typeof stored.logFile, "string");
 });
 
+test("task --background finalizes the queued job as failed when the worker cannot spawn", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  // Point the worker spawn at a nonexistent binary: the child emits an async
+  // 'error' with no pid. The queued record (persisted before the spawn) must
+  // finalize to failed instead of stranding an active-looking job that orphan
+  // reconciliation skips because it has no pid to probe.
+  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the flaky test"], {
+    cwd: repo,
+    env: {
+      ...buildEnv(binDir),
+      CODEX_COMPANION_TASK_WORKER_NODE: path.join(binDir, "missing-worker-binary")
+    }
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  const { jobId } = JSON.parse(launched.stdout);
+
+  const statePath = path.join(resolveStateDir(repo), "state.json");
+  const entry = JSON.parse(fs.readFileSync(statePath, "utf8")).jobs.find((job) => job.id === jobId);
+  assert.equal(entry.status, "failed");
+  assert.equal(entry.pid, null);
+  assert.match(entry.errorMessage, /Failed to launch the background task worker/i);
+
+  const jobFile = path.join(resolveStateDir(repo), "jobs", `${jobId}.json`);
+  const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  assert.equal(stored.status, "failed");
+});
+
 test("task --resume-last reconciles a dead running task before the active-task scan", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
