@@ -70,6 +70,8 @@ import {
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+/** Router directives supported on analyze/exec turn modes only. */
+const TURN_ONLY_ROUTER_DIRECTIVES = new Set(["search", "docs", "tool", "parallel"]);
 
 function printUsage() {
   console.log(
@@ -111,6 +113,33 @@ function normalizeArgv(argv) {
     return splitRawArgumentString(raw);
   }
   return argv;
+}
+
+/**
+ * Review modes do not support analyze/exec routing directives. Fail explicitly
+ * instead of treating flags such as `--docs` as free-form focus text.
+ * @param {string[]} argv
+ * @param {string} commandLabel
+ */
+function rejectUnsupportedReviewDirectives(argv, commandLabel) {
+  const tokens = normalizeArgv(argv);
+  for (const token of tokens) {
+    if (token === "--") {
+      break;
+    }
+    if (!token.startsWith("--") || token === "--") {
+      continue;
+    }
+    const [rawKey] = token.slice(2).split("=", 2);
+    if (TURN_ONLY_ROUTER_DIRECTIVES.has(rawKey)) {
+      throw new Error(
+        `${commandLabel} does not support --${rawKey}. ` +
+          "Use /codex-router:analyze or /codex-router:exec for Codex-native routing directives " +
+          "(--search, --docs, --tool, --parallel). " +
+          "Focus text for steerable review is plain language after the flags, not those directives."
+      );
+    }
+  }
 }
 
 function handleCliCommand(argv) {
@@ -777,6 +806,10 @@ function enqueueBackgroundTask(cwd, job, request) {
 }
 
 async function handleReviewCommand(argv, config) {
+  const commandLabel =
+    config.reviewName === "Adversarial Review" ? "/codex-router:adversarial-review" : "/codex-router:review";
+  rejectUnsupportedReviewDirectives(argv, commandLabel);
+
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["base", "scope", "model", "cwd", "effort"],
     arrayOptions: ["config", "enable", "disable"],

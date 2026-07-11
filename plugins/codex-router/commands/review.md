@@ -15,6 +15,7 @@ Core constraint:
 - This command is review-only.
 - Do not fix issues, apply patches, or suggest that you are about to make changes.
 - Your only job is to run the review and return Codex's output verbatim to the user.
+- Do not pass `--search`, `--docs`, `--tool`, or `--parallel`. Those analyze/exec routing directives are unsupported on review and the companion runtime fails them explicitly.
 
 Execution mode rules:
 - If the raw arguments include `--wait`, do not ask. Run the review in the foreground.

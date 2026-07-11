@@ -41,6 +41,7 @@ test("review command uses AskUserQuestion and background Bash while staying revi
   assert.match(source, /\(Recommended\)/);
   assert.match(source, /normally uses native review and does not support staged-only review or unstaged-only review/i);
   assert.match(source, /promotes focused requests to its `adversarial-review` subcommand/i);
+  assert.match(source, /Do not pass `--search`, `--docs`, `--tool`, or `--parallel`/i);
 });
 
 test("adversarial review command uses AskUserQuestion and background Bash while staying review-only", () => {
@@ -110,7 +111,8 @@ test("analyze and exec commands route through codex-router runtime", () => {
   assert.match(analyze, /--disable <feature>/);
   assert.match(analyze, /Codex-side routing directives/i);
   assert.match(exec, /codex-companion\.mjs" exec "\$ARGUMENTS"/);
-  assert.match(exec, /only V1 command that intentionally starts write-capable Codex work/i);
+  assert.match(exec, /only policy-routed analyze\/exec write-capable entrypoint/i);
+  assert.match(exec, /`\/codex-router:rescue` is a separate task path/i);
   assert.match(exec, /context pack/i);
   assert.match(exec, /--docs/);
   assert.match(exec, /--tool <capability>/);

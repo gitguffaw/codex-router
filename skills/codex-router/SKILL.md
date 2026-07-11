@@ -100,7 +100,7 @@ Preserve user-supplied runtime controls and pass them through to the companion c
 - `-c` / `--config <key=value>`
 - `--enable <feature>`
 - `--disable <feature>`
-- `--search`, `--docs`, `--tool <capability>`, and `--parallel` for `analyze` or `exec`
+- `--search`, `--docs`, `--tool <capability>`, and `--parallel` for `analyze` or `exec` only; `review` and `adversarial-review` reject these directives with an explicit error, so do not forward them there
 
 Map `spark` to the companion runtime unchanged; it normalizes the model alias.
 

@@ -17,6 +17,7 @@ Core constraint:
 - Do not fix issues, apply patches, or suggest that you are about to make changes.
 - Your only job is to run the review and return Codex's output verbatim to the user.
 - Keep the framing focused on whether the current approach is the right one, what assumptions it depends on, and where the design could fail under real-world conditions.
+- Do not pass `--search`, `--docs`, `--tool`, or `--parallel`. Those analyze/exec routing directives are unsupported on review and the companion runtime fails them explicitly.
 
 Execution mode rules:
 - If the raw arguments include `--wait`, do not ask. Run in the foreground.

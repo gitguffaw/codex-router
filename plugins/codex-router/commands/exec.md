@@ -11,7 +11,9 @@ Raw slash-command arguments:
 `$ARGUMENTS`
 
 Core constraints:
-- This is the only V1 command that intentionally starts write-capable Codex work.
+- This is the only policy-routed analyze/exec write-capable entrypoint (`mode=exec`, sandbox workspace-write).
+- `/codex-router:rescue` is a separate task path: it may write only when the rescue subagent forwards `task --write` (default for fix work; read-only when the user asks for diagnosis-only).
+- `/codex-router:cli` is a raw Codex CLI escape hatch and is not job-tracked write routing.
 - Keep all user prompt text inside the companion runtime arguments; do not reinterpret or implement it in Claude.
 - The companion runtime records the selected policy, mode, modifiers, and model controls in a context pack.
 - `--search`, `--docs`, `--tool`, and `--parallel` are Codex-side routing directives. Preserve them exactly; the companion runtime turns them into explicit inner-Codex instructions.

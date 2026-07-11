@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
-import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { finalizeJob, listJobs, resolveJobFile, resolveStateDir, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
 import { createJobProgressUpdater, runTrackedJob } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
@@ -115,6 +115,46 @@ test("review rejects staged-only scope because it is native-review only", () => 
   assert.equal(result.status > 0, true);
   assert.match(result.stderr, /Unsupported review scope "staged"/i);
   assert.match(result.stderr, /Use one of: auto, working-tree, branch, or pass --base <ref>/i);
+});
+
+test("review rejects analyze/exec routing directives instead of treating them as focus text", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  for (const flag of ["--docs", "--search", "--parallel", "--tool"]) {
+    const args = flag === "--tool" ? [SCRIPT, "review", "--tool", "mcp:playwright"] : [SCRIPT, "review", flag];
+    const result = run("node", args, {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(result.status > 0, true, `expected failure for ${flag}`);
+    assert.match(result.stderr, /does not support --(docs|search|parallel|tool)/i);
+    assert.match(result.stderr, /Use \/codex-router:analyze or \/codex-router:exec/i);
+  }
+});
+
+test("adversarial review rejects analyze/exec routing directives", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "adversarial-review", "--docs", "challenge auth"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status > 0, true);
+  assert.match(result.stderr, /does not support --docs/i);
+  assert.match(result.stderr, /\/codex-router:adversarial-review/i);
 });
 
 test("adversarial review rejects staged-only scope to match review target selection", () => {
@@ -460,15 +500,26 @@ test("status marks a running job failed when its runtime process is gone", () =>
   assert.match(fs.readFileSync(logFile, "utf8"), /orphan detection/);
 });
 
-test("status marks a running job failed when its pid was recycled by another process", () => {
+test("status marks a running job failed when its pid was recycled by another process", { skip: process.platform === "win32" }, () => {
   const workspace = makeTempDir();
+  const binDir = makeTempDir();
+  writeExecutable(
+    path.join(binDir, "ps"),
+    "#!/bin/sh\nprintf '%s\\n' 'Sat Jul 11 12:00:00 2026'\n"
+  );
   const { stateDir } = seedRunningJob(workspace, {
     id: "task-recycled",
     pid: process.pid,
     processStartTime: "Thu Jan  1 00:00:00 1970"
   });
 
-  const result = run("node", [SCRIPT, "status", "task-recycled", "--json"], { cwd: workspace });
+  const result = run("node", [SCRIPT, "status", "task-recycled", "--json"], {
+    cwd: workspace,
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`
+    }
+  });
 
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout);

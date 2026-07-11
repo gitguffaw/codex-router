@@ -16,6 +16,12 @@ test("exec is the only write-capable router mode in V1", () => {
   assert.equal(route.sandbox, "workspace-write");
   assert.equal(route.write, true);
   assert.equal(route.workflow, "Exec");
+
+  // Router MODE_CONFIG only defines analyze/exec; write is exclusive to exec.
+  const analyze = buildRouterRequest({ mode: "analyze", prompt: "inspect", options: {} });
+  assert.equal(analyze.write, false);
+  assert.throws(() => buildRouterRequest({ mode: "review", prompt: "x", options: {} }), /Unsupported router mode/);
+  assert.throws(() => buildRouterRequest({ mode: "task", prompt: "x", options: {} }), /Unsupported router mode/);
 });
 
 test("search modifies prompt without changing launch surface", () => {

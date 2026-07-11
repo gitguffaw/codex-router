@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { makeTempDir, run } from "./helpers.mjs";
+import { makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
 import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
 
@@ -170,16 +170,31 @@ test("saveState reclaims a malformed state lock once it ages past the stale thre
   assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
 });
 
-test("saveState immediately reclaims a lock whose live PID has a different start time (PID reuse)", () => {
+test("saveState immediately reclaims a lock whose live PID has a different start time (PID reuse)", { skip: process.platform === "win32" }, () => {
   const workspace = makeTempDir();
+  const binDir = makeTempDir();
+  writeExecutable(
+    path.join(binDir, "ps"),
+    "#!/bin/sh\nprintf '%s\\n' 'Sat Jul 11 12:00:00 2026'\n"
+  );
   const stateDir = resolveStateDir(workspace);
   fs.mkdirSync(stateDir, { recursive: true });
   const lockFile = path.join(stateDir, "state.lock");
   writeLockFile(lockFile, { pid: process.pid, startTime: "Thu Jan  1 00:00:00 1970", nonce: "reused-pid" });
 
-  const saved = saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
-  assert.equal(saved.jobs.length, 0);
-  assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+  try {
+    const saved = saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+    assert.equal(saved.jobs.length, 0);
+    assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
+  } finally {
+    if (previousPath == null) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+  }
 });
 
 test("saveState never steals an aged lock whose holder is alive with a matching identity", () => {
