@@ -10,10 +10,12 @@ import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { loadBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
 import {
+  finalizeJob,
   resolveJobFile,
   resolveStateDir,
   saveState
 } from "../plugins/codex-router/scripts/lib/state.mjs";
+import { isTerminalJobStatus } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -65,7 +67,7 @@ function runStopHookAsync(cwd, env, input) {
   });
 }
 
-test("session end fully cleans up jobs for the ending session", async (t) => {
+test("session end tombstones the ending session's active jobs so surviving workers back off", async (t) => {
   const repo = makeTempDir();
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
@@ -169,10 +171,6 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(otherSessionLog), true);
   assert.equal(fs.existsSync(otherJobFile), true);
-  assert.deepEqual(
-    fs.readdirSync(path.dirname(otherJobFile)).sort(),
-    [path.basename(otherJobFile), path.basename(otherSessionLog)].sort()
-  );
 
   if (sleeperStartTime) {
     await waitFor(() => !isProcessAlive(sleeper.pid));
@@ -181,9 +179,43 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
   }
 
   const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
-  assert.deepEqual(state.jobs.map((job) => job.id), ["review-other"]);
-  const otherJob = state.jobs[0];
+  assert.deepEqual(
+    state.jobs.map((job) => job.id).sort(),
+    ["review-completed", "review-other", "review-running"]
+  );
+  assert.equal(state.jobs.find((job) => job.id === "review-completed").status, "completed");
+  const tombstoned = state.jobs.find((job) => job.id === "review-running");
+  assert.equal(tombstoned.status, "failed");
+  assert.equal(tombstoned.pid, null);
+  assert.match(tombstoned.errorMessage, /session ended/i);
+  const otherJob = state.jobs.find((job) => job.id === "review-other");
+  assert.equal(otherJob.status, "completed");
   assert.equal(otherJob.logFile, otherSessionLog);
+
+  // Tombstoned job artifacts are kept for inspection; only the pruner removes
+  // entries (and their files) from the index.
+  assert.equal(fs.existsSync(runningJobFile), true);
+  assert.equal(fs.existsSync(runningLog), true);
+
+  // Regression: a surviving worker's queued->running start write must back
+  // off on the terminal tombstone. allowInsert exists for pruner evictions;
+  // session teardown must not read as one, or a write-capable worker would
+  // re-insert its job and run after the session ended.
+  const runningRecord = {
+    id: "review-running",
+    status: "running",
+    sessionId: "sess-current",
+    pid: 99999
+  };
+  const startOutcome = finalizeJob(
+    repo,
+    "review-running",
+    ({ entry }) => (entry && isTerminalJobStatus(entry.status) ? null : runningRecord),
+    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
+  );
+  assert.equal(startOutcome.applied, false);
+  const finalState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(finalState.jobs.find((job) => job.id === "review-running").status, "failed");
 });
 
 test("stop hook runs a stop-time review task and blocks on findings when the review gate is enabled", () => {
@@ -446,7 +478,15 @@ test(
     assert.equal(isProcessAlive(missing.pid), true);
 
     const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
-    assert.deepEqual(state.jobs, []);
+    assert.deepEqual(
+      state.jobs.map((job) => job.id).sort(),
+      ["task-matching", "task-mismatched", "task-missing-start-time"]
+    );
+    for (const job of state.jobs) {
+      assert.equal(job.status, "failed", job.id);
+      assert.equal(job.pid, null, job.id);
+      assert.match(job.errorMessage, /session ended/i);
+    }
   }
 );
 

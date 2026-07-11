@@ -13,7 +13,8 @@ import {
   sendBrokerShutdown,
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
-import { loadState, resolveStateFile, updateState } from "./lib/state.mjs";
+import { finalizeJob, loadState, resolveStateFile } from "./lib/state.mjs";
+import { isTerminalJobStatus, nowIso } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
@@ -38,6 +39,8 @@ function appendEnvVar(name, value) {
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
 }
 
+export const SESSION_ENDED_MESSAGE = "Job failed: its Claude session ended before the job completed.";
+
 function cleanupSessionJobs(cwd, sessionId) {
   if (!cwd || !sessionId) {
     return;
@@ -50,29 +53,54 @@ function cleanupSessionJobs(cwd, sessionId) {
   }
 
   const state = loadState(workspaceRoot);
-  const removedJobs = state.jobs.filter((job) => job.sessionId === sessionId);
-  if (removedJobs.length === 0) {
-    return;
-  }
-
-  for (const job of removedJobs) {
+  for (const job of state.jobs) {
+    if (job.sessionId !== sessionId) continue;
     if (job.status !== "queued" && job.status !== "running") continue;
-    // Terminate only a process whose recorded start-time identity still matches
-    // (alive AND same start time), so a recycled pid an unrelated process
-    // inherited is never signalled. The check and signal are colocated to keep
-    // the residual window minimal. Start-time identity is available on both
-    // POSIX (ps) and Windows (Win32_Process.CreationDate). A queued worker with
-    // no recorded start time yet is skipped here and self-aborts on start.
+
+    // Tombstone FIRST, under the state lock. The index entry must stay: a
+    // worker's queued->running start write treats a MISSING entry as a pruner
+    // eviction and re-inserts it (allowInsert), so removing the entry here
+    // would let a not-yet-verifiable worker resurrect the job and run
+    // write-capable work after its session ended. A terminal entry instead
+    // makes that start write back off. First terminal state wins: an entry
+    // that completed or was cancelled meanwhile is left untouched, and a
+    // stored terminal record (owner finished, index write lost) is left for
+    // read-time reconciliation to adopt.
+    const outcome = finalizeJob(
+      workspaceRoot,
+      job.id,
+      ({ entry, stored }) => {
+        if (!entry || isTerminalJobStatus(entry.status)) {
+          return null;
+        }
+        if (stored && isTerminalJobStatus(stored.status)) {
+          return null;
+        }
+        return {
+          status: "failed",
+          phase: "failed",
+          pid: null,
+          errorMessage: SESSION_ENDED_MESSAGE,
+          completedAt: nowIso()
+        };
+      },
+      { storedFallback: job }
+    );
+
+    // Kill with the freshest identity recorded under the lock: a worker that
+    // reached its start write recorded its own pid + start time there, which
+    // the identity check can verify. Terminate only a process whose identity
+    // still matches (alive AND same start time), so a recycled pid an
+    // unrelated process inherited is never signalled. A worker with no
+    // provable identity yet is left alone — the tombstone makes it back off
+    // at its start write instead.
+    const target = outcome.entry ?? job;
     try {
-      terminateProcessIfIdentityMatches(job.pid ?? Number.NaN, job.processStartTime ?? null);
+      terminateProcessIfIdentityMatches(target.pid ?? Number.NaN, target.processStartTime ?? null);
     } catch {
       // Ignore teardown failures during session shutdown.
     }
   }
-
-  updateState(workspaceRoot, (currentState) => {
-    currentState.jobs = currentState.jobs.filter((job) => job.sessionId !== sessionId);
-  });
 }
 
 function handleSessionStart(input) {

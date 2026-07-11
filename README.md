@@ -11,8 +11,9 @@ Host adapters (Claude Code slash commands and the AGY skill) call the companion 
 - `/codex-router:review` and `/codex-router:adversarial-review` now reject the analyze/exec routing directives (`--search`, `--docs`, `--tool`, `--parallel`) with an explicit error instead of silently treating them as focus text.
 - The write boundary is documented and tested precisely: `exec` is the only policy-routed write-capable entrypoint, `rescue` writes only through its separate `task --write` path, and `cli` is a raw escape hatch outside job-tracked routing.
 - Orphaned jobs reconcile everywhere: the stop-time review gate, `task --resume-last`, and session-end teardown now finalize dead-runtime orphans to failed instead of treating them as running.
+- Session end tombstones its remaining active jobs instead of deleting them, so a not-yet-verifiable worker backs off at startup rather than resurrecting its job and continuing write-capable work after the session ended.
 - Job start and progress writes are serialized on the state lock, closing races where a concurrent cancel could resurrect a job or a pruned index entry could discard a finished result.
-- Windows gains real process-identity proof (`Win32_Process.CreationDate`), so teardown never force-kills a recycled PID on any platform, and the worker-launch race on slow identity probes is closed.
+- Windows gains real process-identity proof (`Win32_Process.CreationDate`), so teardown verifies a worker's identity immediately before terminating it — rather than signalling a process that merely reused its PID — and the worker-launch race on slow identity probes is closed. (The residual window between that check and signal delivery is inherent to signalling by PID and is minimized, not eliminated.)
 - See [2.3.1](./plugins/codex-router/CHANGELOG.md#231) for the identity-checked SIGKILL escalation, bounded stop-gate, and broker-reaping work this builds on.
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
