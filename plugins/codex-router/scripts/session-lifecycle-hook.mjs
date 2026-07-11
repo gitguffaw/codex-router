@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { jobProcessIdentityMatches, terminateProcessTree } from "./lib/process.mjs";
+import { terminateProcessIfIdentityMatches, terminateProcessTree } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
   clearBrokerSession,
@@ -58,12 +58,13 @@ function cleanupSessionJobs(cwd, sessionId) {
   for (const job of removedJobs) {
     if (job.status !== "queued" && job.status !== "running") continue;
     // Terminate only a process whose recorded start-time identity still matches
-    // (alive AND same start time) so a recycled pid — one an unrelated process
-    // inherited — is never signalled. Start-time identity is available on both
-    // POSIX (ps) and Windows (Win32_Process.CreationDate).
-    if (!jobProcessIdentityMatches(job.pid ?? Number.NaN, job.processStartTime ?? null)) continue;
+    // (alive AND same start time), so a recycled pid an unrelated process
+    // inherited is never signalled. The check and signal are colocated to keep
+    // the residual window minimal. Start-time identity is available on both
+    // POSIX (ps) and Windows (Win32_Process.CreationDate). A queued worker with
+    // no recorded start time yet is skipped here and self-aborts on start.
     try {
-      terminateProcessTree(job.pid);
+      terminateProcessIfIdentityMatches(job.pid ?? Number.NaN, job.processStartTime ?? null);
     } catch {
       // Ignore teardown failures during session shutdown.
     }

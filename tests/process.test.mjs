@@ -5,6 +5,7 @@ import {
   getProcessStartTime,
   isProcessAlive,
   jobProcessIdentityMatches,
+  terminateProcessIfIdentityMatches,
   terminateProcessTree,
   terminateWithEscalation
 } from "../plugins/codex-router/scripts/lib/process.mjs";
@@ -90,6 +91,30 @@ test("jobProcessIdentityMatches accepts a live pid with a matching start time", 
   });
 
   assert.equal(matches, true);
+});
+
+test("terminateProcessIfIdentityMatches signals only when identity matches", () => {
+  const base = {
+    killImpl() {},
+    getProcessStartTimeImpl: () => "recorded-start",
+    runCommandImpl: () => ({ command: "kill", args: [], status: 0, signal: null, stdout: "", stderr: "" })
+  };
+
+  // Recycled/mismatched pid → no signal.
+  const skipped = terminateProcessIfIdentityMatches(1234, "different-start", { platform: "linux", ...base });
+  assert.equal(skipped.attempted, false);
+
+  // Proven identity → signal delivered.
+  let signalled = false;
+  const fired = terminateProcessIfIdentityMatches(1234, "recorded-start", {
+    platform: "linux",
+    killImpl(pid, signal) {
+      if (signal === "SIGTERM") signalled = true;
+    },
+    getProcessStartTimeImpl: () => "recorded-start"
+  });
+  assert.equal(fired.attempted, true);
+  assert.equal(signalled, true);
 });
 
 test("isProcessAlive reports a live pid, a dead pid, an EPERM pid, and a non-finite pid", () => {

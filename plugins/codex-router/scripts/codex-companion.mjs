@@ -34,10 +34,11 @@ import {
   handleTaskResumeCandidateCommand
 } from "./lib/job-commands.mjs";
 import { resolveModelControls } from "./lib/model-resolution.mjs";
-import { binaryAvailable, getProcessStartTime } from "./lib/process.mjs";
+import { binaryAvailable } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { buildRouterRequest } from "./lib/router.mjs";
 import {
+  finalizeJob,
   generateJobId,
   getConfig,
   setConfig,
@@ -734,18 +735,34 @@ function enqueueBackgroundTask(cwd, job, request) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
-  const child = spawnDetachedTaskWorker(cwd, job.id);
+  // Persist the queued record (carrying the request payload) BEFORE spawning
+  // the worker, so the detached worker always finds its request when it reads
+  // the job file. The worker records its own pid and start-time identity when it
+  // transitions to running; the parent never probes the child's start time
+  // (that probe is slow on Windows and would race the worker's first read).
   const queuedRecord = {
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
-    processStartTime: child.pid ? getProcessStartTime(child.pid) : null,
+    pid: null,
+    processStartTime: null,
     logFile,
     request
   };
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
+
+  const child = spawnDetachedTaskWorker(cwd, job.id);
+
+  // Record the worker pid so a cancel can signal a still-queued worker, but only
+  // while the job is still queued: finalizeJob vetoes if the worker already
+  // advanced the record to running, so this can never clobber the worker's own
+  // authoritative running state.
+  if (child.pid) {
+    finalizeJob(job.workspaceRoot, job.id, ({ entry }) =>
+      entry && entry.status === "queued" ? { pid: child.pid } : null
+    );
+  }
 
   return {
     payload: {

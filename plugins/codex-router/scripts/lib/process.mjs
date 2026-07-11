@@ -68,6 +68,19 @@ export function jobProcessIdentityMatches(pid, expectedStartTime, options = {}) 
 }
 
 
+// Terminate a tracked worker only if its recorded start-time identity still
+// matches, verifying immediately before signalling. Colocating the check and
+// the signal (with no work between) minimises the residual pid-recycle window:
+// a process that dies AND has its pid reused between this check and the kernel
+// delivering the signal is inherent to signalling by pid and cannot be closed
+// portably in Node without OS process handles/pidfds. Returns { attempted }.
+export function terminateProcessIfIdentityMatches(pid, expectedStartTime, options = {}) {
+  if (!jobProcessIdentityMatches(pid, expectedStartTime, options)) {
+    return { attempted: false };
+  }
+  return { attempted: true, ...terminateProcessTree(pid, options) };
+}
+
 export function runCommand(command, args = [], options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,

@@ -208,6 +208,31 @@ test("task --resume-last resumes the latest persisted task thread", () => {
   assert.equal(result.stdout, "Resumed the prior run.\nFollow-up prompt accepted.\n");
 });
 
+test("task --background persists the request payload before the worker can read it", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the flaky test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  const { jobId } = JSON.parse(launched.stdout);
+
+  // enqueue writes the queued record (with its request payload) BEFORE spawning
+  // the detached worker, so a worker that reads immediately can never miss it.
+  // The record is complete the moment the launch returns.
+  const jobFile = path.join(resolveStateDir(repo), "jobs", `${jobId}.json`);
+  const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  assert.ok(stored.request && typeof stored.request === "object", "queued record must carry its request payload");
+  assert.equal(typeof stored.logFile, "string");
+});
+
 test("task --resume-last reconciles a dead running task before the active-task scan", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
