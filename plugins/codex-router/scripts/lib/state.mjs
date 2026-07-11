@@ -309,16 +309,25 @@ export function listJobs(cwd) {
 }
 
 // Atomically move a job to a terminal state in BOTH the state index and the
-// per-job file. Every terminal transition made by a process that does not own
-// the job (cancel commands, orphan reconciliation) must go through here:
-// deciding from the entry/file and then writing them as separate unlocked
-// steps lets two such writers interleave and split the index from the stored
-// result. `patchOrFn` may be a patch object or a function of ({ entry,
-// stored }) evaluated under the lock; `options.guard` can veto the write from
-// the same under-lock view; `options.storedFallback` seeds the job file when
-// none exists yet. A job with no index entry (e.g. pruned concurrently) is
-// never finalized: patching only the job file would recreate a dangling file
-// the index no longer tracks.
+// per-job file. EVERY terminal transition — the owning runtime's own
+// completion/failure as well as cancel commands and orphan reconciliation —
+// must go through here. Deciding from the entry/file and then writing them as
+// separate unlocked steps lets writers interleave and split the index from the
+// stored result; doing both under this lock makes the two records move as one.
+//
+// `patchOrFn` may be a patch object or a function of ({ entry, stored })
+// evaluated under the lock. The decision may return:
+//   - a plain patch  → merged into both the index entry and the job file;
+//   - `{ $index, $file }` → distinct payloads for the index and the job file
+//     (used by the owner, whose full `rendered` result belongs only in the
+//     file, never bloating the shared index);
+//   - `null`/`undefined` → veto: nothing is written (first-terminal-wins, so a
+//     late owner completion never overwrites a cancellation, and vice versa).
+//
+// `options.guard` can veto from the same under-lock view; `options.storedFallback`
+// seeds the job file when none exists yet. A job with no index entry (e.g.
+// pruned concurrently) is never finalized: patching only the job file would
+// recreate a dangling file the index no longer tracks.
 export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
   assertValidJobId(jobId);
   return withStateLock(cwd, () => {
@@ -339,15 +348,23 @@ export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
       return { applied: false, patch: null, entry, stored };
     }
 
-    const patch = typeof patchOrFn === "function" ? patchOrFn({ entry, stored }) : patchOrFn;
+    const decision = typeof patchOrFn === "function" ? patchOrFn({ entry, stored }) : patchOrFn;
+    if (decision == null) {
+      return { applied: false, patch: null, entry, stored };
+    }
+
+    const split = decision.$index !== undefined || decision.$file !== undefined;
+    const indexPatch = split ? decision.$index ?? {} : decision;
+    const filePatch = split ? decision.$file ?? {} : decision;
+
     state.jobs[index] = {
       ...entry,
-      ...patch,
+      ...indexPatch,
       updatedAt: nowIso()
     };
-    writeJobFile(cwd, jobId, { ...(stored ?? options.storedFallback ?? {}), ...patch });
+    writeJobFile(cwd, jobId, { ...(stored ?? options.storedFallback ?? {}), ...filePatch });
     saveStateLocked(cwd, state);
-    return { applied: true, patch, entry, stored };
+    return { applied: true, patch: indexPatch, entry, stored };
   });
 }
 
@@ -368,7 +385,12 @@ export function writeJobFile(cwd, jobId, payload) {
   assertValidJobId(jobId);
   ensureStateDir(cwd);
   const jobFile = resolveJobFile(cwd, jobId);
-  fs.writeFileSync(jobFile, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  // Write via temp + atomic rename so a process killed mid-write (e.g. a
+  // worker SIGKILLed by cancel while flushing its result) can never leave a
+  // torn, unparseable job file that destroys a previously-good record.
+  const tempFile = `${jobFile}.tmp-${process.pid}`;
+  fs.writeFileSync(tempFile, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(tempFile, jobFile);
   return jobFile;
 }
 

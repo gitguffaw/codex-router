@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { resolveStateDir } from "../plugins/codex-router/scripts/lib/state.mjs";
+import { finalizeJob, listJobs, resolveJobFile, resolveStateDir, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
+import { runTrackedJob } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -553,6 +554,76 @@ test("result surfaces the failure for an orphaned job instead of claiming it is 
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.job.status, "failed");
   assert.match(payload.storedJob.errorMessage, /orphan detection/);
+});
+
+test("owner completion backs off when a cancel wins mid-run (first terminal state wins)", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-owner-race";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  const job = { id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" };
+
+  // The runner stands in for the Codex turn. It succeeds, but partway through a
+  // concurrent cancel finalizes the job — exactly the window where the owning
+  // runtime and cancel could otherwise both write the two records.
+  const runner = async () => {
+    finalizeJob(workspace, jobId, {
+      status: "cancelled",
+      phase: "cancelled",
+      pid: null,
+      errorMessage: "Cancelled by user."
+    });
+    return {
+      exitStatus: 0,
+      payload: { ok: true },
+      rendered: "Finished the task.\n",
+      summary: "did the work",
+      warnings: []
+    };
+  };
+
+  await runTrackedJob(job, runner, {});
+
+  const indexed = listJobs(workspace).find((entry) => entry.id === jobId);
+  assert.equal(indexed.status, "cancelled");
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8"));
+  assert.equal(stored.status, "cancelled");
+  assert.equal(stored.rendered, undefined, "a cancelled job must not adopt the owner's late result");
+});
+
+test("owner completion commits both records atomically when it wins the race", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-owner-win";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  const job = { id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" };
+  await runTrackedJob(
+    job,
+    async () => ({
+      exitStatus: 0,
+      payload: { ok: true },
+      rendered: "Finished the task.\n",
+      summary: "did the work",
+      warnings: []
+    }),
+    {}
+  );
+
+  const indexed = listJobs(workspace).find((entry) => entry.id === jobId);
+  assert.equal(indexed.status, "completed");
+  assert.equal(indexed.summary, "did the work");
+  assert.equal(indexed.rendered, undefined, "the shared index must not carry the rendered result");
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8"));
+  assert.equal(stored.status, "completed");
+  assert.equal(stored.rendered, "Finished the task.\n");
 });
 
 test("status --wait times out cleanly when a job is still active", () => {

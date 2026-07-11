@@ -534,10 +534,13 @@ export function renderStoredJobResult(job, storedJob) {
 }
 
 export function renderCancelReport(job) {
+  const cancelled = job.status === "cancelled";
   const lines = [
     "# Codex Cancel",
     "",
-    `Cancelled ${job.id}.`,
+    cancelled
+      ? `Cancelled ${job.id}.`
+      : `${job.id} already finished as ${job.status} before the cancel landed; kept its result.`,
     ""
   ];
 

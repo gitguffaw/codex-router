@@ -314,3 +314,58 @@ test("finalizeJob refuses to write when the index entry is gone", async () => {
   assert.equal(fs.existsSync(resolveJobFile(workspace, "task-pruned")), false);
   assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs, []);
 });
+
+test("finalizeJob writes distinct $index and $file payloads", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: "task-split", status: "running", title: "Codex Task" }]
+  });
+  fs.writeFileSync(resolveJobFile(workspace, "task-split"), JSON.stringify({ id: "task-split", status: "running" }, null, 2), "utf8");
+
+  const outcome = finalizeJob(workspace, "task-split", {
+    $index: { status: "completed", summary: "did the thing" },
+    $file: { status: "completed", rendered: "big output\n" }
+  });
+
+  assert.equal(outcome.applied, true);
+  const indexed = JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs[0];
+  assert.equal(indexed.status, "completed");
+  assert.equal(indexed.summary, "did the thing");
+  assert.equal(indexed.rendered, undefined, "rendered must not bloat the index");
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, "task-split"), "utf8"));
+  assert.equal(stored.rendered, "big output\n");
+  assert.equal(stored.summary, undefined);
+});
+
+test("finalizeJob vetoes when the decision returns null", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: "task-veto", status: "cancelled", title: "Codex Task" }]
+  });
+
+  const outcome = finalizeJob(workspace, "task-veto", ({ entry }) =>
+    entry.status === "running" ? { status: "completed" } : null
+  );
+
+  assert.equal(outcome.applied, false);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs[0].status, "cancelled");
+});
+
+test("writeJobFile replaces atomically and never leaves a temp file behind", async () => {
+  const { writeJobFile, resolveJobsDir } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  writeJobFile(workspace, "task-atomic", { id: "task-atomic", status: "completed" });
+  const leftovers = fs.readdirSync(resolveJobsDir(workspace)).filter((name) => name.includes(".tmp-"));
+  assert.deepEqual(leftovers, []);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, "task-atomic"), "utf8")).status, "completed");
+});

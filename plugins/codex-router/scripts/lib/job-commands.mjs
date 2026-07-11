@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseArgs, splitRawArgumentString } from "./args.mjs";
 import { interruptAppServerTurn } from "./codex.mjs";
 import {
+  buildAdoptedResultPatch,
   buildSingleJobSnapshot,
   buildStatusSnapshot,
   readStoredJob,
@@ -19,7 +20,7 @@ import {
   renderStoredJobResult
 } from "./render.mjs";
 import { finalizeJob, listJobs } from "./state.mjs";
-import { appendLogLine, isActiveJobStatus, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { appendLogLine, isActiveJobStatus, isTerminalJobStatus, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
@@ -213,7 +214,6 @@ export async function handleCancelCommand(argv) {
   await terminateWithEscalation(job.pid ?? Number.NaN, {
     processStartTime: existing.processStartTime ?? job.processStartTime ?? null
   });
-  appendLogLine(job.logFile, "Cancelled by user.");
 
   const completedAt = nowIso();
   const cancelPatch = {
@@ -224,21 +224,45 @@ export async function handleCancelCommand(argv) {
     errorMessage: "Cancelled by user.",
     cancelledAt: completedAt
   };
+
+  // finalizeJob decides and writes the state index and job file together under
+  // the state lock, so this cannot interleave with orphan reconciliation. If
+  // the runtime finished on its own before we took the lock, keep its recorded
+  // result rather than overwriting a real completion with a cancellation.
+  const outcome = finalizeJob(
+    workspaceRoot,
+    job.id,
+    ({ entry, stored }) => {
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return buildAdoptedResultPatch(stored);
+      }
+      // The index entry itself may already be terminal (a completion that
+      // synced the index but left the job file stale/missing). Never rewrite
+      // a finished entry to cancelled — mirror reconcile's active-only guard.
+      if (entry && isTerminalJobStatus(entry.status)) {
+        return buildAdoptedResultPatch(entry);
+      }
+      return cancelPatch;
+    },
+    { storedFallback: { ...existing, ...job } }
+  );
+
+  const finalStatus = outcome.applied ? outcome.patch.status : outcome.entry?.status ?? job.status;
+  const cancelled = finalStatus === "cancelled";
+  if (cancelled) {
+    appendLogLine(job.logFile, "Cancelled by user.");
+  }
+
   const nextJob = {
     ...job,
-    ...cancelPatch
+    ...(outcome.applied ? outcome.patch : outcome.entry ?? {})
   };
-
-  // finalizeJob updates the state index and the job file together under the
-  // state lock, so this cannot interleave with orphan reconciliation.
-  finalizeJob(workspaceRoot, job.id, cancelPatch, {
-    storedFallback: { ...existing, ...job }
-  });
 
   const payload = {
     jobId: job.id,
-    status: "cancelled",
+    status: finalStatus,
     title: job.title,
+    cancelled,
     turnInterruptAttempted: interrupt.attempted,
     turnInterrupted: interrupt.interrupted
   };

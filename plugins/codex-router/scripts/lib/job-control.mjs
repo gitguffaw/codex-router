@@ -214,6 +214,19 @@ function isJobProcessAlive(pid, expectedStartTime, options = {}) {
   return true;
 }
 
+// Patch that syncs a state-index entry to the terminal result its runtime
+// recorded in the job file, instead of overwriting that result.
+export function buildAdoptedResultPatch(stored) {
+  return {
+    status: stored.status,
+    phase: stored.phase ?? null,
+    pid: null,
+    completedAt: stored.completedAt ?? null,
+    ...(stored.threadId ? { threadId: stored.threadId } : {}),
+    ...(stored.errorMessage ? { errorMessage: stored.errorMessage } : {})
+  };
+}
+
 export function reconcileOrphanedJobs(workspaceRoot, jobs, options = {}) {
   return jobs.map((job) => {
     if (!isActiveJobStatus(job.status) || !Number.isFinite(job.pid)) {
@@ -235,14 +248,7 @@ export function reconcileOrphanedJobs(workspaceRoot, jobs, options = {}) {
           // The runtime finished the job but died before its update reached
           // the state index — adopt the recorded result instead of inventing
           // a failure.
-          return {
-            status: stored.status,
-            phase: stored.phase ?? null,
-            pid: null,
-            completedAt: stored.completedAt ?? null,
-            ...(stored.threadId ? { threadId: stored.threadId } : {}),
-            ...(stored.errorMessage ? { errorMessage: stored.errorMessage } : {})
-          };
+          return buildAdoptedResultPatch(stored);
         }
         return {
           status: "failed",

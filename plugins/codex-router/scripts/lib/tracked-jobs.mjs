@@ -2,7 +2,7 @@ import fs from "node:fs";
 import process from "node:process";
 
 import { getProcessStartTime } from "./process.mjs";
-import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { finalizeJob, readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 export const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
@@ -182,14 +182,6 @@ export function createProgressReporter({ stderr = false, logFile = null, onEvent
   };
 }
 
-function readStoredJobOrNull(workspaceRoot, jobId) {
-  const jobFile = resolveJobFile(workspaceRoot, jobId);
-  if (!fs.existsSync(jobFile)) {
-    return null;
-  }
-  return readJobFile(jobFile);
-}
-
 export async function runTrackedJob(job, runner, options = {}) {
   const runningRecord = {
     ...job,
@@ -208,55 +200,79 @@ export async function runTrackedJob(job, runner, options = {}) {
     const completionStatus = normalizeExecutionJobStatus(execution);
     const completionPhase = phaseForJobStatus(completionStatus);
     const completedAt = nowIso();
-    writeJobFile(job.workspaceRoot, job.id, {
-      ...runningRecord,
-      status: completionStatus,
-      threadId: execution.threadId ?? null,
-      turnId: execution.turnId ?? null,
-      pid: null,
-      phase: completionPhase,
-      completedAt,
-      result: execution.payload,
-      rendered: execution.rendered,
-      warnings: execution.warnings ?? []
-    });
-    upsertJob(job.workspaceRoot, {
-      id: job.id,
-      status: completionStatus,
-      threadId: execution.threadId ?? null,
-      turnId: execution.turnId ?? null,
-      summary: execution.summary,
-      phase: completionPhase,
-      pid: null,
-      completedAt,
-      model: execution.model ?? job.model ?? null,
-      effort: execution.effort ?? job.effort ?? null,
-      serviceTier: execution.serviceTier ?? job.serviceTier ?? null,
-      warnings: execution.warnings ?? []
-    });
+    // Commit both records under the state lock. If a cancel (or any other
+    // terminal writer) already won while this runtime was finishing, the entry
+    // is no longer active and we back off — first terminal state wins, so the
+    // owner and cancel can never split the index from the job file. The full
+    // `rendered` result goes only to the job file, never into the shared index.
+    finalizeJob(
+      job.workspaceRoot,
+      job.id,
+      ({ entry }) => {
+        if (!isActiveJobStatus(entry.status)) {
+          return null;
+        }
+        return {
+          $file: {
+            ...runningRecord,
+            status: completionStatus,
+            threadId: execution.threadId ?? null,
+            turnId: execution.turnId ?? null,
+            pid: null,
+            phase: completionPhase,
+            completedAt,
+            result: execution.payload,
+            rendered: execution.rendered,
+            warnings: execution.warnings ?? []
+          },
+          $index: {
+            status: completionStatus,
+            threadId: execution.threadId ?? null,
+            turnId: execution.turnId ?? null,
+            summary: execution.summary,
+            phase: completionPhase,
+            pid: null,
+            completedAt,
+            model: execution.model ?? job.model ?? null,
+            effort: execution.effort ?? job.effort ?? null,
+            serviceTier: execution.serviceTier ?? job.serviceTier ?? null,
+            warnings: execution.warnings ?? []
+          }
+        };
+      },
+      { storedFallback: runningRecord }
+    );
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     return execution;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const existing = readStoredJobOrNull(job.workspaceRoot, job.id) ?? runningRecord;
     const completedAt = nowIso();
-    writeJobFile(job.workspaceRoot, job.id, {
-      ...existing,
-      status: "failed",
-      phase: "failed",
-      errorMessage,
-      pid: null,
-      completedAt,
-      logFile: options.logFile ?? job.logFile ?? existing.logFile ?? null
-    });
-    upsertJob(job.workspaceRoot, {
-      id: job.id,
-      status: "failed",
-      phase: "failed",
-      pid: null,
-      errorMessage,
-      completedAt
-    });
+    finalizeJob(
+      job.workspaceRoot,
+      job.id,
+      ({ entry, stored }) => {
+        if (!isActiveJobStatus(entry.status)) {
+          return null;
+        }
+        const base = stored ?? runningRecord;
+        const failurePatch = {
+          status: "failed",
+          phase: "failed",
+          errorMessage,
+          pid: null,
+          completedAt
+        };
+        return {
+          $file: {
+            ...base,
+            ...failurePatch,
+            logFile: options.logFile ?? job.logFile ?? base.logFile ?? null
+          },
+          $index: failurePatch
+        };
+      },
+      { storedFallback: runningRecord }
+    );
     throw error;
   }
 }
