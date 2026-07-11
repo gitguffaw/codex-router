@@ -229,10 +229,23 @@ export function buildAdoptedResultPatch(stored) {
 
 export function reconcileOrphanedJobs(workspaceRoot, jobs, options = {}) {
   return jobs.map((job) => {
-    if (!isActiveJobStatus(job.status) || !Number.isFinite(job.pid)) {
+    if (!isActiveJobStatus(job.status)) {
       return job;
     }
-    if (isJobProcessAlive(job.pid, job.processStartTime ?? null, options)) {
+    if (Number.isFinite(job.pid)) {
+      if (isJobProcessAlive(job.pid, job.processStartTime ?? null, options)) {
+        return job;
+      }
+    } else if (job.status === "queued" && Number.isFinite(job.launcherPid)) {
+      // A queued record carries no worker pid until the launcher records it.
+      // While the launcher is alive the spawn may simply not have happened
+      // yet; a dead launcher can never spawn the worker or record its pid, so
+      // the record is unrecoverable and must fail rather than read as active
+      // forever.
+      if (isJobProcessAlive(job.launcherPid, job.launcherProcessStartTime ?? null, options)) {
+        return job;
+      }
+    } else {
       return job;
     }
 

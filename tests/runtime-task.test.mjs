@@ -267,6 +267,54 @@ test("task --background finalizes the queued job as failed when the worker canno
   assert.equal(stored.status, "failed");
 });
 
+test("status reconciles a queued job whose launcher died before spawning its worker", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const firstRun = run(process.execPath, [SCRIPT, "task", "initial task"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(firstRun.status, 0, firstRun.stderr);
+
+  // Rewind the record to the pre-spawn shape: queued, no worker pid, and a
+  // launcher identity that no longer matches a live process. Reconciliation
+  // must fail this record instead of skipping it as unprobeable.
+  const statePath = path.join(resolveStateDir(repo), "state.json");
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const job = state.jobs[0];
+  const deadProcess = run(process.execPath, ["-e", "process.exit(0)"], { cwd: repo });
+  assert.equal(deadProcess.status, 0, deadProcess.stderr);
+  job.status = "queued";
+  job.phase = "queued";
+  job.pid = null;
+  job.processStartTime = null;
+  job.launcherPid = deadProcess.pid;
+  job.launcherProcessStartTime = "recorded-dead-launcher-start";
+  delete job.completedAt;
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  // The job file must be queued too: a terminal stored record would (rightly)
+  // be adopted instead of failed.
+  const jobFilePath = path.join(resolveStateDir(repo), "jobs", `${job.id}.json`);
+  fs.writeFileSync(jobFilePath, `${JSON.stringify(job, null, 2)}\n`, "utf8");
+
+  const status = run(process.execPath, [SCRIPT, "status"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(status.status, 0, status.stderr);
+
+  const reconciled = JSON.parse(fs.readFileSync(statePath, "utf8")).jobs.find((entry) => entry.id === job.id);
+  assert.equal(reconciled.status, "failed");
+  assert.equal(reconciled.pid, null);
+  assert.match(reconciled.errorMessage, /orphan/i);
+});
+
 test("task --resume-last reconciles a dead running task before the active-task scan", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

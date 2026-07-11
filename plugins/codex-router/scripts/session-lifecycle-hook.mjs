@@ -52,54 +52,71 @@ function cleanupSessionJobs(cwd, sessionId) {
     return;
   }
 
-  const state = loadState(workspaceRoot);
-  for (const job of state.jobs) {
-    if (job.sessionId !== sessionId) continue;
-    if (job.status !== "queued" && job.status !== "running") continue;
-
-    // Tombstone FIRST, under the state lock. The index entry must stay: a
-    // worker's queued->running start write treats a MISSING entry as a pruner
-    // eviction and re-inserts it (allowInsert), so removing the entry here
-    // would let a not-yet-verifiable worker resurrect the job and run
-    // write-capable work after its session ended. A terminal entry instead
-    // makes that start write back off. First terminal state wins: an entry
-    // that completed or was cancelled meanwhile is left untouched, and a
-    // stored terminal record (owner finished, index write lost) is left for
-    // read-time reconciliation to adopt.
-    const outcome = finalizeJob(
-      workspaceRoot,
-      job.id,
-      ({ entry, stored }) => {
-        if (!entry || isTerminalJobStatus(entry.status)) {
-          return null;
-        }
-        if (stored && isTerminalJobStatus(stored.status)) {
-          return null;
-        }
-        return {
-          status: "failed",
-          phase: "failed",
-          pid: null,
-          errorMessage: SESSION_ENDED_MESSAGE,
-          completedAt: nowIso()
-        };
-      },
-      { storedFallback: job }
+  // Re-scan from fresh state until quiescent: a launcher from this session
+  // that persists its queued record after an earlier snapshot would otherwise
+  // be missed, and its worker would run after the session ended. Bounded so a
+  // pathological writer cannot keep the hook alive forever.
+  const processed = new Set();
+  for (let pass = 0; pass < 5; pass += 1) {
+    const candidates = loadState(workspaceRoot).jobs.filter(
+      (job) =>
+        job.sessionId === sessionId &&
+        (job.status === "queued" || job.status === "running") &&
+        !processed.has(job.id)
     );
-
-    // Kill with the freshest identity recorded under the lock: a worker that
-    // reached its start write recorded its own pid + start time there, which
-    // the identity check can verify. Terminate only a process whose identity
-    // still matches (alive AND same start time), so a recycled pid an
-    // unrelated process inherited is never signalled. A worker with no
-    // provable identity yet is left alone — the tombstone makes it back off
-    // at its start write instead.
-    const target = outcome.entry ?? job;
-    try {
-      terminateProcessIfIdentityMatches(target.pid ?? Number.NaN, target.processStartTime ?? null);
-    } catch {
-      // Ignore teardown failures during session shutdown.
+    if (candidates.length === 0) {
+      break;
     }
+    for (const job of candidates) {
+      processed.add(job.id);
+      tombstoneSessionJob(workspaceRoot, job);
+    }
+  }
+}
+
+function tombstoneSessionJob(workspaceRoot, job) {
+  // Tombstone FIRST, under the state lock. The index entry must stay: a
+  // worker's queued->running start write treats a MISSING entry as a pruner
+  // eviction and re-inserts it (allowInsert), so removing the entry here
+  // would let a not-yet-verifiable worker resurrect the job and run
+  // write-capable work after its session ended. A terminal entry instead
+  // makes that start write back off. First terminal state wins: an entry
+  // that completed or was cancelled meanwhile is left untouched, and a
+  // stored terminal record (owner finished, index write lost) is left for
+  // read-time reconciliation to adopt.
+  const outcome = finalizeJob(
+    workspaceRoot,
+    job.id,
+    ({ entry, stored }) => {
+      if (!entry || isTerminalJobStatus(entry.status)) {
+        return null;
+      }
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return null;
+      }
+      return {
+        status: "failed",
+        phase: "failed",
+        pid: null,
+        errorMessage: SESSION_ENDED_MESSAGE,
+        completedAt: nowIso()
+      };
+    },
+    { storedFallback: job }
+  );
+
+  // Kill with the freshest identity recorded under the lock: a worker that
+  // reached its start write recorded its own pid + start time there, which
+  // the identity check can verify. Terminate only a process whose identity
+  // still matches (alive AND same start time), so a recycled pid an
+  // unrelated process inherited is never signalled. A worker with no
+  // provable identity yet is left alone — the tombstone makes it back off
+  // at its start write instead.
+  const target = outcome.entry ?? job;
+  try {
+    terminateProcessIfIdentityMatches(target.pid ?? Number.NaN, target.processStartTime ?? null);
+  } catch {
+    // Ignore teardown failures during session shutdown.
   }
 }
 

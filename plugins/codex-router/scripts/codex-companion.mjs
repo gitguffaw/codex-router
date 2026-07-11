@@ -34,7 +34,7 @@ import {
   handleTaskResumeCandidateCommand
 } from "./lib/job-commands.mjs";
 import { resolveModelControls } from "./lib/model-resolution.mjs";
-import { binaryAvailable } from "./lib/process.mjs";
+import { binaryAvailable, getProcessStartTime } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { buildRouterRequest } from "./lib/router.mjs";
 import {
@@ -802,6 +802,12 @@ function enqueueBackgroundTask(cwd, job, request) {
     phase: "queued",
     pid: null,
     processStartTime: null,
+    // The launcher's own identity makes a pre-spawn queued record
+    // reconcilable: if the launcher dies before the worker exists or has its
+    // pid recorded, orphan reconciliation probes this identity instead of
+    // skipping the pid-less record forever.
+    launcherPid: process.pid,
+    launcherProcessStartTime: getProcessStartTime(process.pid),
     logFile,
     request
   };
