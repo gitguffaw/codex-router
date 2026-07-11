@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { terminateProcessTree } from "./lib/process.mjs";
+import { jobProcessIdentityMatches, terminateProcessTree } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
   clearBrokerSession,
@@ -56,12 +56,10 @@ function cleanupSessionJobs(cwd, sessionId) {
   }
 
   for (const job of removedJobs) {
-    const stillRunning = job.status === "queued" || job.status === "running";
-    if (!stillRunning) {
-      continue;
-    }
+    if (job.status !== "queued" && job.status !== "running") continue;
+    if (!jobProcessIdentityMatches(job.pid ?? Number.NaN, job.processStartTime ?? null)) continue; // Dead or recycled pid -> skip.
     try {
-      terminateProcessTree(job.pid ?? Number.NaN);
+      terminateProcessTree(job.pid);
     } catch {
       // Ignore teardown failures during session shutdown.
     }

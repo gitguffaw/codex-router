@@ -1,7 +1,94 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { terminateProcessTree, terminateWithEscalation } from "../plugins/codex-router/scripts/lib/process.mjs";
+import {
+  jobProcessIdentityMatches,
+  terminateProcessTree,
+  terminateWithEscalation
+} from "../plugins/codex-router/scripts/lib/process.mjs";
+
+test("jobProcessIdentityMatches rejects a non-finite pid without probing", () => {
+  const matches = jobProcessIdentityMatches(Number.NaN, "expected-start", {
+    killImpl() {
+      throw new Error("non-finite pids must not be probed");
+    },
+    getProcessStartTimeImpl() {
+      throw new Error("non-finite pids must not have their start time read");
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects a dead pid", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl(pid, signal) {
+      assert.equal(pid, 1234);
+      assert.equal(signal, 0);
+      const error = new Error("dead");
+      error.code = "ESRCH";
+      throw error;
+    },
+    getProcessStartTimeImpl() {
+      throw new Error("dead pids must not have their start time read");
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects a missing expected start time", () => {
+  const matches = jobProcessIdentityMatches(1234, null, {
+    killImpl(pid, signal) {
+      assert.equal(pid, 1234);
+      assert.equal(signal, 0);
+    },
+    getProcessStartTimeImpl() {
+      throw new Error("missing expected identity must short-circuit the start-time read");
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects an unknown current start time", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl() {},
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return null;
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects a mismatched start time", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl() {},
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return "different-start";
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches accepts a live pid with a matching start time", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl(pid, signal) {
+      assert.equal(pid, 1234);
+      assert.equal(signal, 0);
+    },
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return "expected-start";
+    }
+  });
+
+  assert.equal(matches, true);
+});
 
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;

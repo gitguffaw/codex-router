@@ -276,6 +276,11 @@ export function reconcileOrphanedJobs(workspaceRoot, jobs, options = {}) {
   });
 }
 
+export function listReconciledJobs(cwd, options = {}) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  return reconcileOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options);
+}
+
 export function readStoredJob(workspaceRoot, jobId) {
   const jobFile = resolveJobFile(workspaceRoot, jobId);
   if (!fs.existsSync(jobFile)) {

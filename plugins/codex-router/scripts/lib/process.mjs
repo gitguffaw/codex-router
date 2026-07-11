@@ -17,6 +17,21 @@ export function getProcessStartTime(pid) {
   }
 }
 
+export function jobProcessIdentityMatches(pid, expectedStartTime, options = {}) {
+  if (!Number.isFinite(pid)) return false;
+  const killImpl = options.killImpl ?? process.kill.bind(process);
+  const getProcessStartTimeImpl = options.getProcessStartTimeImpl ?? getProcessStartTime;
+  try {
+    killImpl(pid, 0);
+  } catch (probeError) {
+    if (probeError?.code !== "EPERM") return false;
+  }
+  if (!expectedStartTime) return false;
+  const currentStartTime = getProcessStartTimeImpl(pid);
+  if (!currentStartTime) return false;
+  return currentStartTime === expectedStartTime;
+}
+
 export function runCommand(command, args = [], options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,

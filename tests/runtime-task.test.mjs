@@ -208,6 +208,48 @@ test("task --resume-last resumes the latest persisted task thread", () => {
   assert.equal(result.stdout, "Resumed the prior run.\nFollow-up prompt accepted.\n");
 });
 
+test("task --resume-last reconciles a dead running task before the active-task scan", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const firstRun = run(process.execPath, [SCRIPT, "task", "initial task"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(firstRun.status, 0, firstRun.stderr);
+
+  const statePath = path.join(resolveStateDir(repo), "state.json");
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const orphanedJob = state.jobs[0];
+  const deadProcess = run(process.execPath, ["-e", "process.exit(0)"], { cwd: repo });
+  assert.equal(deadProcess.status, 0, deadProcess.stderr);
+  orphanedJob.status = "running";
+  orphanedJob.phase = "running";
+  orphanedJob.pid = deadProcess.pid;
+  orphanedJob.processStartTime = "recorded-dead-process-start";
+  delete orphanedJob.completedAt;
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+  const result = run(process.execPath, [SCRIPT, "task", "--resume-last", "follow up"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /still running/i);
+  assert.equal(result.stdout, "Resumed the prior run.\nFollow-up prompt accepted.\n");
+
+  const reconciledState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const reconciledJob = reconciledState.jobs.find((job) => job.id === orphanedJob.id);
+  assert.equal(reconciledJob.status, "completed");
+  assert.ok(reconciledJob.threadId);
+});
+
 test("task-resume-candidate returns the latest rescue thread from the current session", () => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);

@@ -6,9 +6,14 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
-import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { loadBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
-import { resolveStateDir } from "../plugins/codex-router/scripts/lib/state.mjs";
+import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
+import {
+  resolveJobFile,
+  resolveStateDir,
+  saveState
+} from "../plugins/codex-router/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -26,6 +31,15 @@ async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error("Timed out waiting for condition.");
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
 }
 
 function runStopHookAsync(cwd, env, input) {
@@ -80,6 +94,7 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
     stdio: "ignore"
   });
   sleeper.unref();
+  const sleeperStartTime = getProcessStartTime(sleeper.pid);
   fs.writeFileSync(runningJobFile, JSON.stringify({ id: "review-running" }, null, 2), "utf8");
 
   t.after(() => {
@@ -116,6 +131,7 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
             title: "Codex Review",
             sessionId: "sess-current",
             pid: sleeper.pid,
+            processStartTime: sleeperStartTime,
             logFile: runningLog,
             createdAt: "2026-03-18T15:32:00.000Z",
             updatedAt: "2026-03-18T15:33:00.000Z"
@@ -158,14 +174,11 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
     [path.basename(otherJobFile), path.basename(otherSessionLog)].sort()
   );
 
-  await waitFor(() => {
-    try {
-      process.kill(sleeper.pid, 0);
-      return false;
-    } catch (error) {
-      return error?.code === "ESRCH";
-    }
-  });
+  if (sleeperStartTime) {
+    await waitFor(() => !isProcessAlive(sleeper.pid));
+  } else {
+    assert.equal(isProcessAlive(sleeper.pid), true);
+  }
 
   const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
   assert.deepEqual(state.jobs.map((job) => job.id), ["review-other"]);
@@ -285,6 +298,157 @@ test("stop hook logs running tasks to stderr without blocking when the review ga
   assert.match(blocked.stderr, /\/codex-router:status/i);
   assert.match(blocked.stderr, /\/codex-router:cancel task-live/i);
 });
+
+test("stop hook reconciles a dead running task before checking for active jobs", () => {
+  const repo = makeTempDir();
+  initGitRepo(repo);
+
+  const deadProcess = run(process.execPath, ["-e", "process.exit(0)"], { cwd: repo });
+  assert.equal(deadProcess.status, 0, deadProcess.stderr);
+
+  const stateDir = resolveStateDir(repo);
+  const logFile = path.join(stateDir, "jobs", "task-orphan.log");
+  const job = {
+    id: "task-orphan",
+    status: "running",
+    phase: "running",
+    title: "Codex Task",
+    jobClass: "task",
+    sessionId: "sess-current",
+    pid: deadProcess.pid,
+    processStartTime: "recorded-dead-process-start",
+    logFile,
+    createdAt: "2026-03-18T15:32:00.000Z",
+    updatedAt: "2026-03-18T15:33:00.000Z"
+  };
+  saveState(repo, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [job]
+  });
+  fs.writeFileSync(logFile, "running\n", "utf8");
+  fs.writeFileSync(resolveJobFile(repo, job.id), `${JSON.stringify(job, null, 2)}\n`, "utf8");
+
+  const result = run(process.execPath, [STOP_HOOK], {
+    cwd: repo,
+    env: {
+      ...process.env,
+      CODEX_COMPANION_SESSION_ID: "sess-current"
+    },
+    input: JSON.stringify({ cwd: repo, session_id: "sess-current" })
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "");
+  assert.doesNotMatch(result.stderr, /still running/i);
+
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(state.jobs[0].status, "failed");
+  assert.equal(state.jobs[0].pid, null);
+  assert.match(state.jobs[0].errorMessage, /orphan detection/i);
+
+  const storedJob = JSON.parse(fs.readFileSync(resolveJobFile(repo, job.id), "utf8"));
+  assert.equal(storedJob.status, "failed");
+});
+
+test(
+  "session end terminates only jobs with a proven matching process identity",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    const matchingStartTime = "Sat Jul 11 12:00:00 2026";
+    writeExecutable(
+      path.join(binDir, "ps"),
+      `#!/bin/sh\nprintf '%s\\n' '${matchingStartTime}'\n`
+    );
+    const matching = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: repo,
+      detached: true,
+      stdio: "ignore"
+    });
+    const mismatched = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: repo,
+      detached: true,
+      stdio: "ignore"
+    });
+    const missing = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: repo,
+      detached: true,
+      stdio: "ignore"
+    });
+    matching.unref();
+    mismatched.unref();
+    missing.unref();
+
+    const children = [matching, mismatched, missing];
+    t.after(() => {
+      for (const child of children) {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          try {
+            process.kill(child.pid, "SIGTERM");
+          } catch {
+            // Ignore missing processes.
+          }
+        }
+      }
+    });
+
+    saveState(repo, {
+      version: 1,
+      config: { stopReviewGate: false },
+      jobs: [
+        {
+          id: "task-matching",
+          status: "running",
+          sessionId: "sess-current",
+          pid: matching.pid,
+          processStartTime: matchingStartTime,
+          updatedAt: "2026-03-18T15:35:00.000Z"
+        },
+        {
+          id: "task-mismatched",
+          status: "running",
+          sessionId: "sess-current",
+          pid: mismatched.pid,
+          processStartTime: "Thu Jan  1 00:00:00 1970",
+          updatedAt: "2026-03-18T15:34:00.000Z"
+        },
+        {
+          id: "task-missing-start-time",
+          status: "running",
+          sessionId: "sess-current",
+          pid: missing.pid,
+          updatedAt: "2026-03-18T15:33:00.000Z"
+        }
+      ]
+    });
+
+    const result = run(process.execPath, [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        CODEX_COMPANION_SESSION_ID: "sess-current",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`
+      },
+      input: JSON.stringify({
+        hook_event_name: "SessionEnd",
+        session_id: "sess-current",
+        cwd: repo
+      })
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    await waitFor(() => !isProcessAlive(matching.pid));
+    assert.equal(isProcessAlive(mismatched.pid), true);
+    assert.equal(isProcessAlive(missing.pid), true);
+
+    const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+    assert.deepEqual(state.jobs, []);
+  }
+);
 
 test("stop hook allows the stop when the review gate is enabled and the stop-time review task is clean", () => {
   const repo = makeTempDir();

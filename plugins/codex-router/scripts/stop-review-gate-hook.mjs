@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 
 import { getCodexAvailability } from "./lib/codex.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
-import { getConfig, listJobs, updateState } from "./lib/state.mjs";
-import { sortJobsNewestFirst } from "./lib/job-control.mjs";
-import { SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
+import { getConfig, updateState } from "./lib/state.mjs";
+import { listReconciledJobs, sortJobsNewestFirst } from "./lib/job-control.mjs";
+import { isActiveJobStatus, SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
@@ -197,8 +197,8 @@ function main() {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
 
-  const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), input));
-  const runningJob = jobs.find((job) => job.status === "queued" || job.status === "running");
+  const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listReconciledJobs(workspaceRoot), input));
+  const runningJob = jobs.find((job) => isActiveJobStatus(job.status));
   const runningTaskNote = runningJob
     ? `Codex task ${runningJob.id} is still running. Check /codex-router:status and use /codex-router:cancel ${runningJob.id} if you want to stop it before ending the session.`
     : null;
