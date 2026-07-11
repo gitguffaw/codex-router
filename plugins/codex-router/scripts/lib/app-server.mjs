@@ -24,7 +24,7 @@ export const BROKER_BUSY_RPC_CODE = -32001;
 
 /** @type {ClientInfo} */
 const DEFAULT_CLIENT_INFO = {
-  title: "Codex Plugin",
+  title: "Codex Router",
   name: "Claude Code",
   version: PLUGIN_MANIFEST.version ?? "0.0.0"
 };

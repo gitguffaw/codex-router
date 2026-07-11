@@ -1,8 +1,9 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
-import { isActiveJobStatus, isTerminalJobStatus, SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { getProcessStartTime } from "./process.mjs";
+import { finalizeJob, getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { appendLogLine, isActiveJobStatus, isTerminalJobStatus, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
@@ -185,6 +186,114 @@ export function enrichJob(job, options = {}) {
   };
 }
 
+export const ORPHANED_JOB_MESSAGE =
+  "Job runtime exited without recording a result. Marked failed by orphan detection.";
+
+function isJobProcessAlive(pid, expectedStartTime, options = {}) {
+  const killImpl = options.killImpl ?? process.kill.bind(process);
+  const getProcessStartTimeImpl = options.getProcessStartTimeImpl ?? getProcessStartTime;
+
+  try {
+    killImpl(pid, 0);
+  } catch (probeError) {
+    if (probeError?.code !== "EPERM") {
+      return false;
+    }
+  }
+
+  // The PID exists, but it may be an unrelated process that reused it. A
+  // recorded-vs-current start time mismatch proves reuse; when either side is
+  // unknown, treat the job as alive — a false "dead" verdict would fail a
+  // job that is still running, which is worse than delayed detection.
+  if (expectedStartTime) {
+    const currentStartTime = getProcessStartTimeImpl(pid);
+    if (currentStartTime && currentStartTime !== expectedStartTime) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Patch that syncs a state-index entry to the terminal result its runtime
+// recorded in the job file, instead of overwriting that result.
+export function buildAdoptedResultPatch(stored) {
+  return {
+    status: stored.status,
+    phase: stored.phase ?? null,
+    pid: null,
+    completedAt: stored.completedAt ?? null,
+    ...(stored.threadId ? { threadId: stored.threadId } : {}),
+    ...(stored.errorMessage ? { errorMessage: stored.errorMessage } : {})
+  };
+}
+
+export function reconcileOrphanedJobs(workspaceRoot, jobs, options = {}) {
+  return jobs.map((job) => {
+    if (!isActiveJobStatus(job.status)) {
+      return job;
+    }
+    if (Number.isFinite(job.pid)) {
+      if (isJobProcessAlive(job.pid, job.processStartTime ?? null, options)) {
+        return job;
+      }
+    } else if (job.status === "queued" && Number.isFinite(job.launcherPid)) {
+      // A queued record carries no worker pid until the launcher records it.
+      // While the launcher is alive the spawn may simply not have happened
+      // yet; a dead launcher can never spawn the worker or record its pid, so
+      // the record is unrecoverable and must fail rather than read as active
+      // forever.
+      if (isJobProcessAlive(job.launcherPid, job.launcherProcessStartTime ?? null, options)) {
+        return job;
+      }
+    } else {
+      return job;
+    }
+
+    // The pid is dead, so the owning runtime can write nothing further — but
+    // a cancel command is still a live writer. The whole decision therefore
+    // happens under finalizeJob's state lock, against the entry and job file
+    // as they exist at that moment.
+    const outcome = finalizeJob(
+      workspaceRoot,
+      job.id,
+      ({ stored }) => {
+        if (stored && isTerminalJobStatus(stored.status)) {
+          // The runtime finished the job but died before its update reached
+          // the state index — adopt the recorded result instead of inventing
+          // a failure.
+          return buildAdoptedResultPatch(stored);
+        }
+        return {
+          status: "failed",
+          phase: "failed",
+          pid: null,
+          errorMessage: ORPHANED_JOB_MESSAGE,
+          completedAt: nowIso()
+        };
+      },
+      {
+        guard: ({ entry }) => entry != null && isActiveJobStatus(entry.status),
+        storedFallback: job
+      }
+    );
+
+    if (!outcome.applied) {
+      // Another writer (completion or cancel) finalized the job while we
+      // probed — report their result, not ours.
+      return outcome.entry ?? job;
+    }
+    if (outcome.patch.errorMessage === ORPHANED_JOB_MESSAGE) {
+      appendLogLine(job.logFile, ORPHANED_JOB_MESSAGE);
+    }
+    return { ...job, ...outcome.patch };
+  });
+}
+
+export function listReconciledJobs(cwd, options = {}) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  return reconcileOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options);
+}
+
 export function readStoredJob(workspaceRoot, jobId) {
   const jobFile = resolveJobFile(workspaceRoot, jobId);
   if (!fs.existsSync(jobFile)) {
@@ -218,7 +327,9 @@ function matchJobReference(jobs, reference, predicate = () => true) {
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
-  const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), options));
+  const jobs = sortJobsNewestFirst(
+    filterJobsForCurrentSession(reconcileOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options), options)
+  );
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
 
@@ -246,7 +357,7 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
 export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const jobs = sortJobsNewestFirst(reconcileOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options));
   const selected = matchJobReference(jobs, reference);
   if (!selected) {
     throw new Error(`No job found for "${reference}". Run /codex-router:status to inspect known jobs.`);
@@ -260,7 +371,8 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
 
 export function resolveResultJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(reference ? listJobs(workspaceRoot) : filterJobsForCurrentSession(listJobs(workspaceRoot)));
+  const reconciled = reconcileOrphanedJobs(workspaceRoot, listJobs(workspaceRoot));
+  const jobs = sortJobsNewestFirst(reference ? reconciled : filterJobsForCurrentSession(reconciled));
   const selected = matchJobReference(
     jobs,
     reference,

@@ -38,14 +38,15 @@ import { binaryAvailable, getProcessStartTime } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { buildRouterRequest } from "./lib/router.mjs";
 import {
+  finalizeJob,
   generateJobId,
   getConfig,
-  listJobs,
   setConfig,
   upsertJob,
   writeJobFile
 } from "./lib/state.mjs";
 import {
+  listReconciledJobs,
   readStoredJob,
   sortJobsNewestFirst
 } from "./lib/job-control.mjs";
@@ -55,6 +56,8 @@ import {
   createJobProgressUpdater,
   createJobRecord,
   createProgressReporter,
+  isTerminalJobStatus,
+  nowIso,
   runTrackedJob
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
@@ -69,6 +72,8 @@ import {
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+/** Router directives supported on analyze/exec turn modes only. */
+const TURN_ONLY_ROUTER_DIRECTIVES = new Set(["search", "docs", "tool", "parallel"]);
 
 function printUsage() {
   console.log(
@@ -110,6 +115,33 @@ function normalizeArgv(argv) {
     return splitRawArgumentString(raw);
   }
   return argv;
+}
+
+/**
+ * Review modes do not support analyze/exec routing directives. Fail explicitly
+ * instead of treating flags such as `--docs` as free-form focus text.
+ * @param {string[]} argv
+ * @param {string} commandLabel
+ */
+function rejectUnsupportedReviewDirectives(argv, commandLabel) {
+  const tokens = normalizeArgv(argv);
+  for (const token of tokens) {
+    if (token === "--") {
+      break;
+    }
+    if (!token.startsWith("--") || token === "--") {
+      continue;
+    }
+    const [rawKey] = token.slice(2).split("=", 2);
+    if (TURN_ONLY_ROUTER_DIRECTIVES.has(rawKey)) {
+      throw new Error(
+        `${commandLabel} does not support --${rawKey}. ` +
+          "Use /codex-router:analyze or /codex-router:exec for Codex-native routing directives " +
+          "(--search, --docs, --tool, --parallel). " +
+          "Focus text for steerable review is plain language after the flags, not those directives."
+      );
+    }
+  }
 }
 
 function handleCliCommand(argv) {
@@ -357,7 +389,7 @@ function validateNativeReviewRequest(target, focusText) {
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const sessionId = getCurrentClaudeSessionId();
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
+  const jobs = sortJobsNewestFirst(listReconciledJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
@@ -719,7 +751,10 @@ async function runForegroundCommand(job, runner, options = {}) {
 
 function spawnDetachedTaskWorker(cwd, jobId) {
   const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
-  const child = spawn(process.execPath, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
+  // Test-only escape hatch: overriding the worker binary lets the suite
+  // exercise the spawn-failure path deterministically.
+  const nodeBinary = process.env.CODEX_COMPANION_TASK_WORKER_NODE || process.execPath;
+  const child = spawn(nodeBinary, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
     env: process.env,
     detached: true,
@@ -730,22 +765,80 @@ function spawnDetachedTaskWorker(cwd, jobId) {
   return child;
 }
 
+function failWorkerLaunch(job, logFile, error) {
+  const message = `Failed to launch the background task worker: ${
+    error instanceof Error ? error.message : String(error)
+  }`;
+  appendLogLine(logFile, message);
+  // First terminal state wins: never overwrite a record another writer (a
+  // cancel, or a worker that somehow started) already finalized or advanced.
+  finalizeJob(job.workspaceRoot, job.id, ({ entry }) => {
+    if (!entry || isTerminalJobStatus(entry.status)) {
+      return null;
+    }
+    return {
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      errorMessage: message,
+      completedAt: nowIso()
+    };
+  });
+  return message;
+}
+
 function enqueueBackgroundTask(cwd, job, request) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
-  const child = spawnDetachedTaskWorker(cwd, job.id);
+  // Persist the queued record (carrying the request payload) BEFORE spawning
+  // the worker, so the detached worker always finds its request when it reads
+  // the job file. The worker records its own pid and start-time identity when it
+  // transitions to running; the parent never probes the child's start time
+  // (that probe is slow on Windows and would race the worker's first read).
   const queuedRecord = {
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
-    processStartTime: child.pid ? getProcessStartTime(child.pid) : null,
+    pid: null,
+    processStartTime: null,
+    // The launcher's own identity makes a pre-spawn queued record
+    // reconcilable: if the launcher dies before the worker exists or has its
+    // pid recorded, orphan reconciliation probes this identity instead of
+    // skipping the pid-less record forever.
+    launcherPid: process.pid,
+    launcherProcessStartTime: getProcessStartTime(process.pid),
     logFile,
     request
   };
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
+
+  let child;
+  try {
+    child = spawnDetachedTaskWorker(cwd, job.id);
+  } catch (error) {
+    throw new Error(failWorkerLaunch(job, logFile, error));
+  }
+
+  // Spawning can also fail asynchronously (EAGAIN, EMFILE, missing binary):
+  // the child then has no pid and emits 'error'. Without a listener that
+  // event would crash the CLI and strand the queued record with pid: null —
+  // a shape orphan reconciliation deliberately skips — so the job would read
+  // as active forever. Finalize it to failed instead.
+  child.on("error", (error) => {
+    failWorkerLaunch(job, logFile, error);
+  });
+
+  // Record the worker pid so a cancel can signal a still-queued worker, but only
+  // while the job is still queued: finalizeJob vetoes if the worker already
+  // advanced the record to running, so this can never clobber the worker's own
+  // authoritative running state.
+  if (child.pid) {
+    finalizeJob(job.workspaceRoot, job.id, ({ entry }) =>
+      entry && entry.status === "queued" ? { pid: child.pid } : null
+    );
+  }
 
   return {
     payload: {
@@ -760,6 +853,10 @@ function enqueueBackgroundTask(cwd, job, request) {
 }
 
 async function handleReviewCommand(argv, config) {
+  const commandLabel =
+    config.reviewName === "Adversarial Review" ? "/codex-router:adversarial-review" : "/codex-router:review";
+  rejectUnsupportedReviewDirectives(argv, commandLabel);
+
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["base", "scope", "model", "cwd", "effort"],
     arrayOptions: ["config", "enable", "disable"],

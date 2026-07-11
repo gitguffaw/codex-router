@@ -308,6 +308,81 @@ test("cancel stops an active background job and marks it cancelled", async (t) =
   assert.match(fs.readFileSync(logFile, "utf8"), /Cancelled by user/);
 });
 
+test("cancel keeps a completed result when the runtime finished before the cancel landed", () => {
+  const workspace = makeTempDir();
+  const stateDir = resolveStateDir(workspace);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+
+  const logFile = path.join(jobsDir, "task-raced.log");
+  const jobFile = path.join(jobsDir, "task-raced.json");
+  fs.writeFileSync(logFile, "[2026-03-18T15:30:00.000Z] Starting Codex Task.\n", "utf8");
+
+  // The state index still says "running" with a dead pid, but the runtime
+  // already wrote its completed result to the job file before exiting.
+  const deadPid = run("node", ["-e", "process.exit(0)"]).pid;
+  fs.writeFileSync(
+    jobFile,
+    JSON.stringify(
+      {
+        id: "task-raced",
+        status: "completed",
+        phase: "done",
+        title: "Codex Task",
+        threadId: "thr_raced",
+        completedAt: "2026-03-18T15:31:00.000Z",
+        rendered: "Finished the task.\n"
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(stateDir, "state.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        config: { stopReviewGate: false },
+        jobs: [
+          {
+            id: "task-raced",
+            status: "running",
+            title: "Codex Task",
+            jobClass: "task",
+            summary: "Investigate flaky test",
+            pid: deadPid,
+            logFile,
+            createdAt: "2026-03-18T15:30:00.000Z",
+            startedAt: "2026-03-18T15:30:01.000Z",
+            updatedAt: "2026-03-18T15:30:02.000Z"
+          }
+        ]
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const cancelResult = run("node", [SCRIPT, "cancel", "task-raced", "--json"], { cwd: workspace });
+
+  assert.equal(cancelResult.status, 0, cancelResult.stderr);
+  const payload = JSON.parse(cancelResult.stdout);
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.cancelled, false);
+
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const job = state.jobs.find((entry) => entry.id === "task-raced");
+  assert.equal(job.status, "completed");
+  assert.equal(job.threadId, "thr_raced");
+
+  const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  assert.equal(stored.status, "completed");
+  assert.equal(stored.rendered, "Finished the task.\n");
+  assert.doesNotMatch(fs.readFileSync(logFile, "utf8"), /Cancelled by user/);
+});
+
 test("cancel without a job id ignores active jobs from other Claude sessions", () => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);

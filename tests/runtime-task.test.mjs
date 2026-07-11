@@ -208,6 +208,155 @@ test("task --resume-last resumes the latest persisted task thread", () => {
   assert.equal(result.stdout, "Resumed the prior run.\nFollow-up prompt accepted.\n");
 });
 
+test("task --background persists the request payload before the worker can read it", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the flaky test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  const { jobId } = JSON.parse(launched.stdout);
+
+  // enqueue writes the queued record (with its request payload) BEFORE spawning
+  // the detached worker, so a worker that reads immediately can never miss it.
+  // The record is complete the moment the launch returns.
+  const jobFile = path.join(resolveStateDir(repo), "jobs", `${jobId}.json`);
+  const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  assert.ok(stored.request && typeof stored.request === "object", "queued record must carry its request payload");
+  assert.equal(typeof stored.logFile, "string");
+});
+
+test("task --background finalizes the queued job as failed when the worker cannot spawn", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  // Point the worker spawn at a nonexistent binary: the child emits an async
+  // 'error' with no pid. The queued record (persisted before the spawn) must
+  // finalize to failed instead of stranding an active-looking job that orphan
+  // reconciliation skips because it has no pid to probe.
+  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the flaky test"], {
+    cwd: repo,
+    env: {
+      ...buildEnv(binDir),
+      CODEX_COMPANION_TASK_WORKER_NODE: path.join(binDir, "missing-worker-binary")
+    }
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  const { jobId } = JSON.parse(launched.stdout);
+
+  const statePath = path.join(resolveStateDir(repo), "state.json");
+  const entry = JSON.parse(fs.readFileSync(statePath, "utf8")).jobs.find((job) => job.id === jobId);
+  assert.equal(entry.status, "failed");
+  assert.equal(entry.pid, null);
+  assert.match(entry.errorMessage, /Failed to launch the background task worker/i);
+
+  const jobFile = path.join(resolveStateDir(repo), "jobs", `${jobId}.json`);
+  const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  assert.equal(stored.status, "failed");
+});
+
+test("status reconciles a queued job whose launcher died before spawning its worker", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const firstRun = run(process.execPath, [SCRIPT, "task", "initial task"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(firstRun.status, 0, firstRun.stderr);
+
+  // Rewind the record to the pre-spawn shape: queued, no worker pid, and a
+  // launcher identity that no longer matches a live process. Reconciliation
+  // must fail this record instead of skipping it as unprobeable.
+  const statePath = path.join(resolveStateDir(repo), "state.json");
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const job = state.jobs[0];
+  const deadProcess = run(process.execPath, ["-e", "process.exit(0)"], { cwd: repo });
+  assert.equal(deadProcess.status, 0, deadProcess.stderr);
+  job.status = "queued";
+  job.phase = "queued";
+  job.pid = null;
+  job.processStartTime = null;
+  job.launcherPid = deadProcess.pid;
+  job.launcherProcessStartTime = "recorded-dead-launcher-start";
+  delete job.completedAt;
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  // The job file must be queued too: a terminal stored record would (rightly)
+  // be adopted instead of failed.
+  const jobFilePath = path.join(resolveStateDir(repo), "jobs", `${job.id}.json`);
+  fs.writeFileSync(jobFilePath, `${JSON.stringify(job, null, 2)}\n`, "utf8");
+
+  const status = run(process.execPath, [SCRIPT, "status"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(status.status, 0, status.stderr);
+
+  const reconciled = JSON.parse(fs.readFileSync(statePath, "utf8")).jobs.find((entry) => entry.id === job.id);
+  assert.equal(reconciled.status, "failed");
+  assert.equal(reconciled.pid, null);
+  assert.match(reconciled.errorMessage, /orphan/i);
+});
+
+test("task --resume-last reconciles a dead running task before the active-task scan", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const firstRun = run(process.execPath, [SCRIPT, "task", "initial task"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(firstRun.status, 0, firstRun.stderr);
+
+  const statePath = path.join(resolveStateDir(repo), "state.json");
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const orphanedJob = state.jobs[0];
+  const deadProcess = run(process.execPath, ["-e", "process.exit(0)"], { cwd: repo });
+  assert.equal(deadProcess.status, 0, deadProcess.stderr);
+  orphanedJob.status = "running";
+  orphanedJob.phase = "running";
+  orphanedJob.pid = deadProcess.pid;
+  orphanedJob.processStartTime = "recorded-dead-process-start";
+  delete orphanedJob.completedAt;
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+  const result = run(process.execPath, [SCRIPT, "task", "--resume-last", "follow up"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /still running/i);
+  assert.equal(result.stdout, "Resumed the prior run.\nFollow-up prompt accepted.\n");
+
+  const reconciledState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const reconciledJob = reconciledState.jobs.find((job) => job.id === orphanedJob.id);
+  assert.equal(reconciledJob.status, "completed");
+  assert.ok(reconciledJob.threadId);
+});
+
 test("task-resume-candidate returns the latest rescue thread from the current session", () => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);

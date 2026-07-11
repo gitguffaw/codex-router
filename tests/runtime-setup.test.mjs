@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { loadBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
 import { resolveStateDir } from "../plugins/codex-router/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -38,7 +39,7 @@ test("setup reports ready when fake codex is installed and authenticated", () =>
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ready, true);
   assert.match(payload.codex.detail, /advanced runtime available/);
-  assert.equal(payload.sessionRuntime.mode, "shared");
+  assert.equal(payload.sessionRuntime.mode, loadBrokerSession(workspace) ? "shared" : "direct");
 });
 
 test("setup is ready without npm when Codex is already installed and authenticated", () => {
@@ -250,6 +251,12 @@ test("analyze runs read-only with context-pack metadata", () => {
   assert.equal(payload.workflow, "Analyze");
   assert.equal(payload.contextPack.id.startsWith("ctx-"), true);
   assert.match(payload.rawOutput, /Handled the requested task/);
+
+  const stateDir = resolveStateDir(repo);
+  const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(routerState.jobs[0].write, false);
+  assert.equal(routerState.jobs[0].contextPackId, payload.contextPack.id);
+  assert.ok(routerState.jobs[0].policyHash);
 });
 
 test("exec is write-capable and --best --xhigh --fast starts app-server with config overrides", () => {
@@ -287,6 +294,36 @@ test("exec is write-capable and --best --xhigh --fast starts app-server with con
   assert.equal(routerState.jobs[0].model, "gpt-5.5");
   assert.equal(routerState.jobs[0].effort, "xhigh");
   assert.equal(routerState.jobs[0].serviceTier, "fast");
+  assert.equal(routerState.jobs[0].write, true);
+  assert.ok(routerState.jobs[0].contextPackId);
+  assert.ok(routerState.jobs[0].policyHash);
+});
+
+test("task without --write stays read-only; task --write is write-capable", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const readOnly = run("node", [SCRIPT, "task", "--json", "diagnose only"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(readOnly.status, 0, readOnly.stderr);
+  const readOnlyState = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+  assert.equal(readOnlyState.jobs[0].write, false);
+
+  const writeRepo = makeTempDir();
+  const writeBin = makeTempDir();
+  installFakeCodex(writeBin);
+  initGitRepo(writeRepo);
+  const writeCapable = run("node", [SCRIPT, "task", "--write", "--json", "apply the fix"], {
+    cwd: writeRepo,
+    env: buildEnv(writeBin)
+  });
+  assert.equal(writeCapable.status, 0, writeCapable.stderr);
+  const writeState = JSON.parse(fs.readFileSync(path.join(resolveStateDir(writeRepo), "state.json"), "utf8"));
+  assert.equal(writeState.jobs[0].write, true);
 });
 
 test("analyze --background enqueues a router job with analyze metadata", async () => {

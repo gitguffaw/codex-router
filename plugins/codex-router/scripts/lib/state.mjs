@@ -308,6 +308,81 @@ export function listJobs(cwd) {
   return loadState(cwd).jobs;
 }
 
+// Atomically move a job to a terminal state in BOTH the state index and the
+// per-job file. EVERY terminal transition — the owning runtime's own
+// completion/failure as well as cancel commands and orphan reconciliation —
+// must go through here. Deciding from the entry/file and then writing them as
+// separate unlocked steps lets writers interleave and split the index from the
+// stored result; doing both under this lock makes the two records move as one.
+//
+// `patchOrFn` may be a patch object or a function of ({ entry, stored })
+// evaluated under the lock. The decision may return:
+//   - a plain patch  → merged into both the index entry and the job file;
+//   - `{ $index, $file }` → distinct payloads for the index and the job file
+//     (used by the owner, whose full `rendered` result belongs only in the
+//     file, never bloating the shared index);
+//   - `null`/`undefined` → veto: nothing is written (first-terminal-wins, so a
+//     late owner completion never overwrites a cancellation, and vice versa).
+//
+// `options.guard` can veto from the same under-lock view; `options.storedFallback`
+// seeds the job file when none exists yet.
+//
+// By default a job with no index entry is NOT written: for cancel/reconcile,
+// patching only the job file would recreate a dangling file the index no longer
+// tracks. The owning runtime is authoritative for its own job, so it passes
+// `options.allowInsert` (with `options.insertBase`) to re-add an entry the
+// pruner evicted mid-run, rather than silently dropping its own result.
+export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
+  assertValidJobId(jobId);
+  return withStateLock(cwd, () => {
+    const state = loadState(cwd);
+    const index = state.jobs.findIndex((job) => job.id === jobId);
+    const entry = index === -1 ? null : state.jobs[index];
+    const jobFile = resolveJobFile(cwd, jobId);
+    let stored = null;
+    if (fs.existsSync(jobFile)) {
+      try {
+        stored = readJobFile(jobFile);
+      } catch {
+        stored = null;
+      }
+    }
+
+    if ((entry == null && !options.allowInsert) || (options.guard && !options.guard({ entry, stored }))) {
+      return { applied: false, inserted: false, patch: null, entry, stored };
+    }
+
+    const decision = typeof patchOrFn === "function" ? patchOrFn({ entry, stored }) : patchOrFn;
+    if (decision == null) {
+      return { applied: false, inserted: false, patch: null, entry, stored };
+    }
+
+    const split = decision.$index !== undefined || decision.$file !== undefined;
+    const indexPatch = split ? decision.$index ?? {} : decision;
+    const filePatch = split ? decision.$file ?? {} : decision;
+
+    const timestamp = nowIso();
+    if (index === -1) {
+      state.jobs.unshift({
+        id: jobId,
+        createdAt: timestamp,
+        ...(options.insertBase ?? {}),
+        ...indexPatch,
+        updatedAt: timestamp
+      });
+    } else {
+      state.jobs[index] = {
+        ...entry,
+        ...indexPatch,
+        updatedAt: timestamp
+      };
+    }
+    writeJobFile(cwd, jobId, { ...(stored ?? options.storedFallback ?? {}), ...filePatch });
+    saveStateLocked(cwd, state);
+    return { applied: true, inserted: index === -1, patch: indexPatch, entry, stored };
+  });
+}
+
 export function setConfig(cwd, key, value) {
   return updateState(cwd, (state) => {
     state.config = {
@@ -325,7 +400,12 @@ export function writeJobFile(cwd, jobId, payload) {
   assertValidJobId(jobId);
   ensureStateDir(cwd);
   const jobFile = resolveJobFile(cwd, jobId);
-  fs.writeFileSync(jobFile, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  // Write via temp + atomic rename so a process killed mid-write (e.g. a
+  // worker SIGKILLed by cancel while flushing its result) can never leave a
+  // torn, unparseable job file that destroys a previously-good record.
+  const tempFile = `${jobFile}.tmp-${process.pid}`;
+  fs.writeFileSync(tempFile, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(tempFile, jobFile);
   return jobFile;
 }
 

@@ -1,7 +1,204 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { terminateProcessTree, terminateWithEscalation } from "../plugins/codex-router/scripts/lib/process.mjs";
+import {
+  getProcessStartTime,
+  isProcessAlive,
+  jobProcessIdentityMatches,
+  terminateProcessIfIdentityMatches,
+  terminateProcessTree,
+  terminateWithEscalation
+} from "../plugins/codex-router/scripts/lib/process.mjs";
+
+test("jobProcessIdentityMatches rejects a non-finite pid without probing", () => {
+  const matches = jobProcessIdentityMatches(Number.NaN, "expected-start", {
+    killImpl() {
+      throw new Error("non-finite pids must not be probed");
+    },
+    getProcessStartTimeImpl() {
+      throw new Error("non-finite pids must not have their start time read");
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects a dead pid", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl(pid, signal) {
+      assert.equal(pid, 1234);
+      assert.equal(signal, 0);
+      const error = new Error("dead");
+      error.code = "ESRCH";
+      throw error;
+    },
+    getProcessStartTimeImpl() {
+      throw new Error("dead pids must not have their start time read");
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects a missing expected start time", () => {
+  const matches = jobProcessIdentityMatches(1234, null, {
+    killImpl(pid, signal) {
+      assert.equal(pid, 1234);
+      assert.equal(signal, 0);
+    },
+    getProcessStartTimeImpl() {
+      throw new Error("missing expected identity must short-circuit the start-time read");
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects an unknown current start time", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl() {},
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return null;
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches rejects a mismatched start time", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl() {},
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return "different-start";
+    }
+  });
+
+  assert.equal(matches, false);
+});
+
+test("jobProcessIdentityMatches accepts a live pid with a matching start time", () => {
+  const matches = jobProcessIdentityMatches(1234, "expected-start", {
+    killImpl(pid, signal) {
+      assert.equal(pid, 1234);
+      assert.equal(signal, 0);
+    },
+    getProcessStartTimeImpl(pid) {
+      assert.equal(pid, 1234);
+      return "expected-start";
+    }
+  });
+
+  assert.equal(matches, true);
+});
+
+test("terminateProcessIfIdentityMatches signals only when identity matches", () => {
+  const base = {
+    killImpl() {},
+    getProcessStartTimeImpl: () => "recorded-start",
+    runCommandImpl: () => ({ command: "kill", args: [], status: 0, signal: null, stdout: "", stderr: "" })
+  };
+
+  // Recycled/mismatched pid → no signal.
+  const skipped = terminateProcessIfIdentityMatches(1234, "different-start", { platform: "linux", ...base });
+  assert.equal(skipped.attempted, false);
+
+  // Proven identity → signal delivered.
+  let signalled = false;
+  const fired = terminateProcessIfIdentityMatches(1234, "recorded-start", {
+    platform: "linux",
+    killImpl(pid, signal) {
+      if (signal === "SIGTERM") signalled = true;
+    },
+    getProcessStartTimeImpl: () => "recorded-start"
+  });
+  assert.equal(fired.attempted, true);
+  assert.equal(signalled, true);
+});
+
+test("isProcessAlive reports a live pid, a dead pid, an EPERM pid, and a non-finite pid", () => {
+  assert.equal(isProcessAlive(1234, { killImpl() {} }), true);
+  assert.equal(
+    isProcessAlive(1234, {
+      killImpl() {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      }
+    }),
+    false
+  );
+  assert.equal(
+    isProcessAlive(1234, {
+      killImpl() {
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      }
+    }),
+    true
+  );
+  assert.equal(isProcessAlive(Number.NaN, { killImpl() {} }), false);
+});
+
+test("getProcessStartTime reads Win32_Process.CreationDate via PowerShell on Windows", () => {
+  let captured = null;
+  const startTime = getProcessStartTime(4321, {
+    platform: "win32",
+    spawnSyncImpl(command, args) {
+      captured = { command, args };
+      return { status: 0, stdout: "2026-07-11T12:00:00.0000000-07:00\n", stderr: "" };
+    }
+  });
+
+  assert.equal(startTime, "2026-07-11T12:00:00.0000000-07:00");
+  assert.equal(captured.command, "powershell.exe");
+  assert.match(captured.args.join(" "), /Win32_Process -Filter "ProcessId=4321"/);
+});
+
+test("getProcessStartTime returns null on Windows when PowerShell fails or is empty", () => {
+  assert.equal(
+    getProcessStartTime(4321, { platform: "win32", spawnSyncImpl: () => ({ status: 1, stdout: "", stderr: "boom" }) }),
+    null
+  );
+  assert.equal(
+    getProcessStartTime(4321, { platform: "win32", spawnSyncImpl: () => ({ status: 0, stdout: "   \n", stderr: "" }) }),
+    null
+  );
+});
+
+test("getProcessStartTime reads lstart via ps on POSIX", () => {
+  let captured = null;
+  const startTime = getProcessStartTime(4321, {
+    platform: "linux",
+    spawnSyncImpl(command, args) {
+      captured = { command, args };
+      return { status: 0, stdout: "Sat Jul 11 12:00:00 2026\n", stderr: "" };
+    }
+  });
+
+  assert.equal(startTime, "Sat Jul 11 12:00:00 2026");
+  assert.equal(captured.command, "ps");
+  assert.deepEqual(captured.args, ["-p", "4321", "-o", "lstart="]);
+});
+
+test("jobProcessIdentityMatches works uniformly once Windows exposes a start time", () => {
+  // With a real Windows CreationDate, teardown can prove identity: a recycled
+  // pid (mismatched creation date) is skipped, a matching one is terminated —
+  // no platform-specific liveness-only fallback, so no unrelated-pid kill.
+  const winStart = "2026-07-11T12:00:00.0000000-07:00";
+  assert.equal(
+    jobProcessIdentityMatches(4321, winStart, {
+      killImpl() {},
+      getProcessStartTimeImpl: () => winStart
+    }),
+    true
+  );
+  assert.equal(
+    jobProcessIdentityMatches(4321, winStart, {
+      killImpl() {},
+      getProcessStartTimeImpl: () => "2000-01-01T00:00:00.0000000-07:00"
+    }),
+    false
+  );
+});
 
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;

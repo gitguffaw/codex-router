@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { makeTempDir, run } from "./helpers.mjs";
+import { makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
 import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
 
@@ -170,16 +170,31 @@ test("saveState reclaims a malformed state lock once it ages past the stale thre
   assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
 });
 
-test("saveState immediately reclaims a lock whose live PID has a different start time (PID reuse)", () => {
+test("saveState immediately reclaims a lock whose live PID has a different start time (PID reuse)", { skip: process.platform === "win32" }, () => {
   const workspace = makeTempDir();
+  const binDir = makeTempDir();
+  writeExecutable(
+    path.join(binDir, "ps"),
+    "#!/bin/sh\nprintf '%s\\n' 'Sat Jul 11 12:00:00 2026'\n"
+  );
   const stateDir = resolveStateDir(workspace);
   fs.mkdirSync(stateDir, { recursive: true });
   const lockFile = path.join(stateDir, "state.lock");
   writeLockFile(lockFile, { pid: process.pid, startTime: "Thu Jan  1 00:00:00 1970", nonce: "reused-pid" });
 
-  const saved = saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
-  assert.equal(saved.jobs.length, 0);
-  assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+  try {
+    const saved = saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+    assert.equal(saved.jobs.length, 0);
+    assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
+  } finally {
+    if (previousPath == null) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+  }
 });
 
 test("saveState never steals an aged lock whose holder is alive with a matching identity", () => {
@@ -216,4 +231,156 @@ test("saveState never steals an aged lock with a live PID when identity is unver
   );
   assert.equal(fs.readFileSync(lockFile, "utf8").trim(), JSON.stringify(holder));
   assert.equal(fs.existsSync(resolveStateFile(workspace)), false);
+});
+
+function seedFinalizeFixture(workspace, { entryStatus = "running", storedStatus = "running" } = {}) {
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  const entry = {
+    id: "task-final",
+    status: entryStatus,
+    title: "Codex Task",
+    updatedAt: "2026-03-18T15:30:00.000Z"
+  };
+  saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [entry] });
+  const jobFile = resolveJobFile(workspace, "task-final");
+  fs.writeFileSync(jobFile, JSON.stringify({ id: "task-final", status: storedStatus, rendered: "partial\n" }, null, 2), "utf8");
+  return { stateFile, jobFile };
+}
+
+test("finalizeJob patches the state index and job file together", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const { stateFile, jobFile } = seedFinalizeFixture(workspace);
+
+  const outcome = finalizeJob(workspace, "task-final", ({ entry, stored }) => {
+    assert.equal(entry.status, "running");
+    assert.equal(stored.status, "running");
+    return { status: "failed", errorMessage: "orphaned" };
+  });
+
+  assert.equal(outcome.applied, true);
+  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  assert.equal(state.jobs[0].status, "failed");
+  assert.equal(state.jobs[0].errorMessage, "orphaned");
+  const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  assert.equal(stored.status, "failed");
+  assert.equal(stored.rendered, "partial\n");
+});
+
+test("finalizeJob leaves both records untouched when the guard rejects", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const { stateFile, jobFile } = seedFinalizeFixture(workspace, { storedStatus: "completed" });
+
+  const outcome = finalizeJob(
+    workspace,
+    "task-final",
+    { status: "failed" },
+    { guard: ({ stored }) => stored.status !== "completed" }
+  );
+
+  assert.equal(outcome.applied, false);
+  assert.equal(outcome.stored.status, "completed");
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs[0].status, "running");
+  assert.equal(JSON.parse(fs.readFileSync(jobFile, "utf8")).status, "completed");
+});
+
+test("finalizeJob seeds the job file from storedFallback when none exists", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: "task-nofile", status: "running", title: "Codex Task" }]
+  });
+
+  const outcome = finalizeJob(
+    workspace,
+    "task-nofile",
+    { status: "failed" },
+    { storedFallback: { id: "task-nofile", title: "Codex Task", summary: "fallback" } }
+  );
+
+  assert.equal(outcome.applied, true);
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, "task-nofile"), "utf8"));
+  assert.equal(stored.status, "failed");
+  assert.equal(stored.summary, "fallback");
+});
+
+test("finalizeJob refuses to write when the index entry is gone", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+
+  const outcome = finalizeJob(
+    workspace,
+    "task-pruned",
+    { status: "failed" },
+    { storedFallback: { id: "task-pruned", title: "Codex Task" } }
+  );
+
+  assert.equal(outcome.applied, false);
+  assert.equal(outcome.entry, null);
+  assert.equal(fs.existsSync(resolveJobFile(workspace, "task-pruned")), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs, []);
+});
+
+test("finalizeJob writes distinct $index and $file payloads", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: "task-split", status: "running", title: "Codex Task" }]
+  });
+  fs.writeFileSync(resolveJobFile(workspace, "task-split"), JSON.stringify({ id: "task-split", status: "running" }, null, 2), "utf8");
+
+  const outcome = finalizeJob(workspace, "task-split", {
+    $index: { status: "completed", summary: "did the thing" },
+    $file: { status: "completed", rendered: "big output\n" }
+  });
+
+  assert.equal(outcome.applied, true);
+  const indexed = JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs[0];
+  assert.equal(indexed.status, "completed");
+  assert.equal(indexed.summary, "did the thing");
+  assert.equal(indexed.rendered, undefined, "rendered must not bloat the index");
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, "task-split"), "utf8"));
+  assert.equal(stored.rendered, "big output\n");
+  assert.equal(stored.summary, undefined);
+});
+
+test("finalizeJob vetoes when the decision returns null", async () => {
+  const { finalizeJob } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: "task-veto", status: "cancelled", title: "Codex Task" }]
+  });
+
+  const outcome = finalizeJob(workspace, "task-veto", ({ entry }) =>
+    entry.status === "running" ? { status: "completed" } : null
+  );
+
+  assert.equal(outcome.applied, false);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs[0].status, "cancelled");
+});
+
+test("writeJobFile replaces atomically and never leaves a temp file behind", async () => {
+  const { writeJobFile, resolveJobsDir } = await import("../plugins/codex-router/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  writeJobFile(workspace, "task-atomic", { id: "task-atomic", status: "completed" });
+  const leftovers = fs.readdirSync(resolveJobsDir(workspace)).filter((name) => name.includes(".tmp-"));
+  assert.deepEqual(leftovers, []);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, "task-atomic"), "utf8")).status, "completed");
 });
