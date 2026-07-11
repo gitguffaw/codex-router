@@ -17,19 +17,40 @@ export function getProcessStartTime(pid) {
   }
 }
 
-export function jobProcessIdentityMatches(pid, expectedStartTime, options = {}) {
+export function isProcessAlive(pid, options = {}) {
   if (!Number.isFinite(pid)) return false;
   const killImpl = options.killImpl ?? process.kill.bind(process);
-  const getProcessStartTimeImpl = options.getProcessStartTimeImpl ?? getProcessStartTime;
   try {
     killImpl(pid, 0);
+    return true;
   } catch (probeError) {
-    if (probeError?.code !== "EPERM") return false;
+    // EPERM means the process exists but is owned by another user.
+    return probeError?.code === "EPERM";
   }
+}
+
+export function jobProcessIdentityMatches(pid, expectedStartTime, options = {}) {
+  if (!isProcessAlive(pid, options)) return false;
   if (!expectedStartTime) return false;
+  const getProcessStartTimeImpl = options.getProcessStartTimeImpl ?? getProcessStartTime;
   const currentStartTime = getProcessStartTimeImpl(pid);
   if (!currentStartTime) return false;
   return currentStartTime === expectedStartTime;
+}
+
+// Decide whether session-end teardown may terminate a still-active job's
+// process. On POSIX we require PROVEN identity (alive AND recorded start time
+// matches) so a recycled pid is never signalled. On Windows, start times are
+// structurally unavailable (`getProcessStartTime` returns null by design), so
+// identity can never be proven there; requiring it would make teardown skip
+// every worker and leak them. Fall back to liveness-only on Windows — the same
+// risk profile as before the identity guard existed, and no leak.
+export function shouldTerminateTrackedProcess(pid, expectedStartTime, options = {}) {
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    return isProcessAlive(pid, options);
+  }
+  return jobProcessIdentityMatches(pid, expectedStartTime, options);
 }
 
 export function runCommand(command, args = [], options = {}) {

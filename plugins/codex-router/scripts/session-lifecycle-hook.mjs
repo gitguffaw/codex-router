@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { jobProcessIdentityMatches, terminateProcessTree } from "./lib/process.mjs";
+import { shouldTerminateTrackedProcess, terminateProcessTree } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
   clearBrokerSession,
@@ -57,7 +57,10 @@ function cleanupSessionJobs(cwd, sessionId) {
 
   for (const job of removedJobs) {
     if (job.status !== "queued" && job.status !== "running") continue;
-    if (!jobProcessIdentityMatches(job.pid ?? Number.NaN, job.processStartTime ?? null)) continue; // Dead or recycled pid -> skip.
+    // POSIX: proven identity only (skip dead/recycled pids). Windows: liveness
+    // only, since start-time identity is unavailable and requiring it would leak
+    // every worker.
+    if (!shouldTerminateTrackedProcess(job.pid ?? Number.NaN, job.processStartTime ?? null)) continue;
     try {
       terminateProcessTree(job.pid);
     } catch {

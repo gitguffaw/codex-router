@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  isProcessAlive,
   jobProcessIdentityMatches,
+  shouldTerminateTrackedProcess,
   terminateProcessTree,
   terminateWithEscalation
 } from "../plugins/codex-router/scripts/lib/process.mjs";
@@ -88,6 +90,76 @@ test("jobProcessIdentityMatches accepts a live pid with a matching start time", 
   });
 
   assert.equal(matches, true);
+});
+
+test("isProcessAlive reports a live pid, a dead pid, an EPERM pid, and a non-finite pid", () => {
+  assert.equal(isProcessAlive(1234, { killImpl() {} }), true);
+  assert.equal(
+    isProcessAlive(1234, {
+      killImpl() {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      }
+    }),
+    false
+  );
+  assert.equal(
+    isProcessAlive(1234, {
+      killImpl() {
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      }
+    }),
+    true
+  );
+  assert.equal(isProcessAlive(Number.NaN, { killImpl() {} }), false);
+});
+
+test("shouldTerminateTrackedProcess requires proven identity on POSIX", () => {
+  const base = {
+    killImpl() {},
+    getProcessStartTimeImpl() {
+      return "live-start";
+    }
+  };
+  // Match → terminate.
+  assert.equal(
+    shouldTerminateTrackedProcess(1234, "live-start", { platform: "linux", ...base }),
+    true
+  );
+  // Mismatch (recycled pid) → skip.
+  assert.equal(
+    shouldTerminateTrackedProcess(1234, "recorded-start", { platform: "linux", ...base }),
+    false
+  );
+  // No recorded start time → skip.
+  assert.equal(
+    shouldTerminateTrackedProcess(1234, null, { platform: "linux", ...base }),
+    false
+  );
+});
+
+test("shouldTerminateTrackedProcess falls back to liveness-only on Windows (no worker leak)", () => {
+  // Windows has no start-time identity, so a live worker must still be
+  // terminated even though processStartTime is null.
+  assert.equal(
+    shouldTerminateTrackedProcess(1234, null, {
+      platform: "win32",
+      killImpl() {},
+      getProcessStartTimeImpl() {
+        throw new Error("must not consult start time on Windows");
+      }
+    }),
+    true
+  );
+  // A dead pid is still skipped on Windows.
+  assert.equal(
+    shouldTerminateTrackedProcess(1234, null, {
+      platform: "win32",
+      killImpl() {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      }
+    }),
+    false
+  );
 });
 
 test("terminateProcessTree uses taskkill on Windows", () => {
