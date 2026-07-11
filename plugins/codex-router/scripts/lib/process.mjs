@@ -1,12 +1,41 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 
-export function getProcessStartTime(pid) {
-  if (process.platform === "win32" || !Number.isFinite(pid)) {
+function getWindowsProcessStartTime(pid, options = {}) {
+  const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
+  try {
+    // Win32_Process.CreationDate is a stable per-process timestamp; two distinct
+    // processes that reused a pid have different creation dates. Get-CimInstance
+    // materializes it as a .NET DateTime, and round-trip ("o") formatting gives
+    // a deterministic string to compare recorded-vs-current identity. wmic is
+    // deprecated/removed on recent Windows, so use PowerShell CIM.
+    const result = spawnSyncImpl(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { $p.CreationDate.ToString("o") }`
+      ],
+      { encoding: "utf8", windowsHide: true, timeout: 4000 }
+    );
+    return result.status === 0 ? result.stdout.trim() || null : null;
+  } catch {
     return null;
   }
+}
+
+export function getProcessStartTime(pid, options = {}) {
+  if (!Number.isFinite(pid)) {
+    return null;
+  }
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    return getWindowsProcessStartTime(pid, options);
+  }
+  const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
   try {
-    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
+    const result = spawnSyncImpl("ps", ["-p", String(pid), "-o", "lstart="], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 2000
@@ -38,20 +67,6 @@ export function jobProcessIdentityMatches(pid, expectedStartTime, options = {}) 
   return currentStartTime === expectedStartTime;
 }
 
-// Decide whether session-end teardown may terminate a still-active job's
-// process. On POSIX we require PROVEN identity (alive AND recorded start time
-// matches) so a recycled pid is never signalled. On Windows, start times are
-// structurally unavailable (`getProcessStartTime` returns null by design), so
-// identity can never be proven there; requiring it would make teardown skip
-// every worker and leak them. Fall back to liveness-only on Windows — the same
-// risk profile as before the identity guard existed, and no leak.
-export function shouldTerminateTrackedProcess(pid, expectedStartTime, options = {}) {
-  const platform = options.platform ?? process.platform;
-  if (platform === "win32") {
-    return isProcessAlive(pid, options);
-  }
-  return jobProcessIdentityMatches(pid, expectedStartTime, options);
-}
 
 export function runCommand(command, args = [], options = {}) {
   const result = spawnSync(command, args, {

@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  getProcessStartTime,
   isProcessAlive,
   jobProcessIdentityMatches,
-  shouldTerminateTrackedProcess,
   terminateProcessTree,
   terminateWithEscalation
 } from "../plugins/codex-router/scripts/lib/process.mjs";
@@ -113,50 +113,63 @@ test("isProcessAlive reports a live pid, a dead pid, an EPERM pid, and a non-fin
   assert.equal(isProcessAlive(Number.NaN, { killImpl() {} }), false);
 });
 
-test("shouldTerminateTrackedProcess requires proven identity on POSIX", () => {
-  const base = {
-    killImpl() {},
-    getProcessStartTimeImpl() {
-      return "live-start";
+test("getProcessStartTime reads Win32_Process.CreationDate via PowerShell on Windows", () => {
+  let captured = null;
+  const startTime = getProcessStartTime(4321, {
+    platform: "win32",
+    spawnSyncImpl(command, args) {
+      captured = { command, args };
+      return { status: 0, stdout: "2026-07-11T12:00:00.0000000-07:00\n", stderr: "" };
     }
-  };
-  // Match → terminate.
+  });
+
+  assert.equal(startTime, "2026-07-11T12:00:00.0000000-07:00");
+  assert.equal(captured.command, "powershell.exe");
+  assert.match(captured.args.join(" "), /Win32_Process -Filter "ProcessId=4321"/);
+});
+
+test("getProcessStartTime returns null on Windows when PowerShell fails or is empty", () => {
   assert.equal(
-    shouldTerminateTrackedProcess(1234, "live-start", { platform: "linux", ...base }),
-    true
+    getProcessStartTime(4321, { platform: "win32", spawnSyncImpl: () => ({ status: 1, stdout: "", stderr: "boom" }) }),
+    null
   );
-  // Mismatch (recycled pid) → skip.
   assert.equal(
-    shouldTerminateTrackedProcess(1234, "recorded-start", { platform: "linux", ...base }),
-    false
-  );
-  // No recorded start time → skip.
-  assert.equal(
-    shouldTerminateTrackedProcess(1234, null, { platform: "linux", ...base }),
-    false
+    getProcessStartTime(4321, { platform: "win32", spawnSyncImpl: () => ({ status: 0, stdout: "   \n", stderr: "" }) }),
+    null
   );
 });
 
-test("shouldTerminateTrackedProcess falls back to liveness-only on Windows (no worker leak)", () => {
-  // Windows has no start-time identity, so a live worker must still be
-  // terminated even though processStartTime is null.
+test("getProcessStartTime reads lstart via ps on POSIX", () => {
+  let captured = null;
+  const startTime = getProcessStartTime(4321, {
+    platform: "linux",
+    spawnSyncImpl(command, args) {
+      captured = { command, args };
+      return { status: 0, stdout: "Sat Jul 11 12:00:00 2026\n", stderr: "" };
+    }
+  });
+
+  assert.equal(startTime, "Sat Jul 11 12:00:00 2026");
+  assert.equal(captured.command, "ps");
+  assert.deepEqual(captured.args, ["-p", "4321", "-o", "lstart="]);
+});
+
+test("jobProcessIdentityMatches works uniformly once Windows exposes a start time", () => {
+  // With a real Windows CreationDate, teardown can prove identity: a recycled
+  // pid (mismatched creation date) is skipped, a matching one is terminated —
+  // no platform-specific liveness-only fallback, so no unrelated-pid kill.
+  const winStart = "2026-07-11T12:00:00.0000000-07:00";
   assert.equal(
-    shouldTerminateTrackedProcess(1234, null, {
-      platform: "win32",
+    jobProcessIdentityMatches(4321, winStart, {
       killImpl() {},
-      getProcessStartTimeImpl() {
-        throw new Error("must not consult start time on Windows");
-      }
+      getProcessStartTimeImpl: () => winStart
     }),
     true
   );
-  // A dead pid is still skipped on Windows.
   assert.equal(
-    shouldTerminateTrackedProcess(1234, null, {
-      platform: "win32",
-      killImpl() {
-        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-      }
+    jobProcessIdentityMatches(4321, winStart, {
+      killImpl() {},
+      getProcessStartTimeImpl: () => "2000-01-01T00:00:00.0000000-07:00"
     }),
     false
   );

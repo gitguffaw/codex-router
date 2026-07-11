@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { shouldTerminateTrackedProcess, terminateProcessTree } from "./lib/process.mjs";
+import { jobProcessIdentityMatches, terminateProcessTree } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
   clearBrokerSession,
@@ -57,10 +57,11 @@ function cleanupSessionJobs(cwd, sessionId) {
 
   for (const job of removedJobs) {
     if (job.status !== "queued" && job.status !== "running") continue;
-    // POSIX: proven identity only (skip dead/recycled pids). Windows: liveness
-    // only, since start-time identity is unavailable and requiring it would leak
-    // every worker.
-    if (!shouldTerminateTrackedProcess(job.pid ?? Number.NaN, job.processStartTime ?? null)) continue;
+    // Terminate only a process whose recorded start-time identity still matches
+    // (alive AND same start time) so a recycled pid — one an unrelated process
+    // inherited — is never signalled. Start-time identity is available on both
+    // POSIX (ps) and Windows (Win32_Process.CreationDate).
+    if (!jobProcessIdentityMatches(job.pid ?? Number.NaN, job.processStartTime ?? null)) continue;
     try {
       terminateProcessTree(job.pid);
     } catch {
