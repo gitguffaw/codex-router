@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.0
+
+- Detect orphaned Codex jobs: a tracked job whose runtime process has died (broker crash, machine sleep, temp-dir cleanup) is now marked `failed` the next time its status or result is read — and on the stop-review gate, task-resume, and session-end paths — by probing the recorded worker PID and its process start time, instead of reporting `running` indefinitely. Detection is read-time, so no background watchdog is required.
+- Serialize every terminal job transition — the owning runtime's own completion/failure, `/codex-router:cancel`, and orphan reconciliation — through a single locked `finalizeJob` write with first-terminal-wins semantics, so a job's `state.json` index entry and its per-job record can no longer diverge: a cancel cannot overwrite a real completion, a late completion cannot overwrite a cancel, and neither can split the two records.
+- Serialize the queued→running start write and progress updates through the same lock with terminal-absorbing semantics, so a job cancelled before or during its run is never resurrected to `running`; a worker whose job was already cancelled backs off instead of running.
+- Write per-job records via temp-file + rename so a worker force-killed mid-write can never corrupt a previously good record.
+- Preserve the result of a job the 50-entry pruner evicts mid-run: the owning runtime re-inserts its own completion instead of silently discarding it.
+- Prove worker process identity on Windows via `Win32_Process.CreationDate` (PowerShell `Get-CimInstance`), matching the POSIX `ps lstart` check, so session-end teardown terminates only a still-live worker whose recorded identity still matches — never a process that inherited a recycled PID, and without leaking workers on platforms where identity was previously unavailable.
+- Write a background task's queued record (with its request payload) before spawning the detached worker, so the worker always finds its request at startup; the worker records its own PID and start-time identity when it transitions to running.
+- Reject the analyze/exec routing directives (`--search`, `--docs`, `--tool`, `--parallel`) on `review` and `adversarial-review` with an explicit error pointing at `/codex-router:analyze` and `/codex-router:exec`, instead of silently treating them as free-form focus text.
+- Correct the write-boundary documentation: `/codex-router:exec` is the only policy-routed analyze/exec write-capable entrypoint, `/codex-router:rescue` is a separate task path that writes only via `task --write`, and `/codex-router:cli` is a raw escape hatch outside job-tracked routing. Tests now assert exec-exclusive write router modes, task `--write` gating, and recorded `write`/`contextPackId`/`policyHash` on analyze and exec jobs.
+- Advertise the app-server client identity as "Codex Router" instead of the upstream "Codex Plugin", and narrow the README host-contract claim to the companion command surface (no separate versioned JSON-RPC Core API exists).
+
 ## 2.3.1
 
 - Escalate cancellation to SIGKILL only when the recorded worker PID still has the same process start time, force-killing verified survivors without targeting a recycled PID or process group.

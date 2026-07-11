@@ -4,12 +4,16 @@ Use Codex from Claude Code or Antigravity (`agy`) with policy-backed routing, mo
 
 Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` command namespace for Claude Code and ships an AGY skill bundle for Antigravity. It preserves bundled Codex policy docs as the source of truth for mode selection, modifier behavior, model/reasoning/tier controls, and Codex-native tool boundaries.
 
-## What's New In 2.3.1
+Host adapters (Claude Code slash commands and the AGY skill) call the companion CLI at `plugins/codex-router/scripts/codex-companion.mjs`. Structured job and context-pack records are written on disk; there is no separate versioned host-facing JSON-RPC Core API beyond that companion surface and its `--json` outputs.
 
-- Cancellation now escalates SIGKILL only when the recorded worker identity still matches, so verified survivors are force-killed without risking a recycled PID or process group.
-- The stop-time review gate is bounded: after three consecutive blocks in one stop chain it lets the session stop and reports the unresolved findings as a note, and chains are tracked per session so concurrent sessions cannot reset each other's counters.
-- Test runs no longer leave dozens of idle broker processes behind; brokers accept `CODEX_COMPANION_BROKER_IDLE_TIMEOUT_MS` and the suite sets it to two seconds.
-- See [2.3.0](./plugins/codex-router/CHANGELOG.md#230) for the identity-based state locking, mid-turn death detection, hermetic test, and CI hardening work this builds on.
+## What's New In 2.4.0
+
+- `/codex-router:review` and `/codex-router:adversarial-review` now reject the analyze/exec routing directives (`--search`, `--docs`, `--tool`, `--parallel`) with an explicit error instead of silently treating them as focus text.
+- The write boundary is documented and tested precisely: `exec` is the only policy-routed write-capable entrypoint, `rescue` writes only through its separate `task --write` path, and `cli` is a raw escape hatch outside job-tracked routing.
+- Orphaned jobs reconcile everywhere: the stop-time review gate, `task --resume-last`, and session-end teardown now finalize dead-runtime orphans to failed instead of treating them as running.
+- Job start and progress writes are serialized on the state lock, closing races where a concurrent cancel could resurrect a job or a pruned index entry could discard a finished result.
+- Windows gains real process-identity proof (`Win32_Process.CreationDate`), so teardown never force-kills a recycled PID on any platform, and the worker-launch race on slow identity probes is closed.
+- See [2.3.1](./plugins/codex-router/CHANGELOG.md#231) for the identity-checked SIGKILL escalation, bounded stop-gate, and broker-reaping work this builds on.
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
 
@@ -259,7 +263,7 @@ Examples:
 
 ### `/codex-router:exec`
 
-Runs a direct write-capable Codex execution job. Use this when you explicitly want Codex to make a bounded implementation change. Read-only commands such as `/codex-router:analyze` and `/codex-router:review` do not edit files; `/codex-router:rescue` may also make edits when you hand Codex a fix task.
+Runs a direct write-capable Codex execution job. Use this when you explicitly want Codex to make a bounded implementation change through the policy-routed `exec` mode. Read-only commands such as `/codex-router:analyze` and `/codex-router:review` do not edit files. `/codex-router:rescue` is a separate task path that defaults to `task --write` for fix work (and stays read-only when you ask for diagnosis-only). `/codex-router:cli` is a raw escape hatch and is not job-tracked write routing.
 
 Examples:
 
@@ -315,6 +319,8 @@ Examples:
 ```
 
 This command is read-only and will not perform any changes. When run in the background you can use [`/codex-router:status`](#codex-routerstatus) to check on the progress and [`/codex-router:cancel`](#codex-routercancel) to cancel the ongoing task.
+
+`--search`, `--docs`, `--tool`, and `--parallel` are not supported on review. The companion runtime rejects them explicitly; use [`/codex-router:analyze`](#codex-routeranalyze) or [`/codex-router:exec`](#codex-routerexec) for those Codex-native routing directives. `--search` remains supported on analyze/exec turn modes only.
 
 ### `/codex-router:adversarial-review`
 
