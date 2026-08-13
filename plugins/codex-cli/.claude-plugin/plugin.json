@@ -1,0 +1,19 @@
+{
+  "name": "codex-cli",
+  "displayName": "Codex CLI",
+  "version": "0.1.0",
+  "description": "Teach Claude Code to drive the installed Codex CLI directly when the user wants raw CLI-only Codex work. Defers to codex-router when that plugin is installed or requested.",
+  "author": {
+    "name": "Compound"
+  },
+  "homepage": "https://github.com/gitguffaw/codex-router#minimal-codex-cli-skill",
+  "repository": "https://github.com/gitguffaw/codex-router",
+  "license": "Apache-2.0",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "cli",
+    "review",
+    "delegation"
+  ]
+}

@@ -79,11 +79,27 @@ For a steerable challenge review:
 node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" adversarial-review "<focus>"
 ```
 
-For a long-running delegated task, prefer `task --background`:
+For a long-running delegated `analyze`, `exec`, or `task` job, use `--background` only when Antigravity can also keep a harness-tracked completion watcher alive:
 
 ```bash
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" analyze --background "<prompt>"
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" exec --background "<prompt>"
 node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" task --background "<prompt>"
 ```
+
+Capture the exact job id from the launch output, then start this as a host-managed background command (not an untracked shell `&` process):
+
+```bash
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" await-result "<exact-job-id>"
+```
+
+The watcher emits one concise terminal-status notification and leaves full output behind the companion `result` command:
+
+```bash
+node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" result "<exact-job-id>"
+```
+
+If the current Antigravity harness cannot surface completion from a tracked background command, use `--wait` instead of detaching silently.
 
 For job management:
 
@@ -92,6 +108,8 @@ node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" 
 node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" result
 node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" cancel
 ```
+
+`--wait` and `--background` are mutually exclusive on `task`, `analyze`, `exec`, `review`, and `adversarial-review`. `task`, `analyze`, and `exec` default to foreground when neither flag is present.
 
 Preserve user-supplied runtime controls and pass them through to the companion command:
 
@@ -114,6 +132,7 @@ For setup reports or setup/auth failure messages, preserve the substance of the 
 
 - translate `/codex-router:models` to `node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" models`
 - translate `/codex-router:setup --enable-review-gate` and `/codex-router:setup --disable-review-gate` to the matching `node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" setup ...` commands
+- translate `/codex-router:status` and `/codex-router:result` to the matching companion `status` and `result` commands
 - translate `!codex login` to `codex login`
 - preserve any `codex login --device-auth` or `codex login --with-api-key` guidance when browser login is blocked
 

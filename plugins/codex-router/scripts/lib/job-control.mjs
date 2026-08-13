@@ -369,6 +369,20 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   };
 }
 
+export function buildExactJobSnapshot(cwd, jobId, options = {}) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const indexedJob = listJobs(workspaceRoot).find((job) => job.id === jobId);
+  if (!indexedJob || (options.authorize && !options.authorize(indexedJob))) {
+    throw new Error(`No job found for "${jobId}". Run /codex-router:status to inspect known jobs.`);
+  }
+
+  const [reconciledJob] = reconcileOrphanedJobs(workspaceRoot, [indexedJob], options);
+  return {
+    workspaceRoot,
+    job: enrichJob(reconciledJob, { maxProgressLines: options.maxProgressLines })
+  };
+}
+
 export function resolveResultJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const reconciled = reconcileOrphanedJobs(workspaceRoot, listJobs(workspaceRoot));

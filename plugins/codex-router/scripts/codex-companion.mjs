@@ -6,7 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
+import { hasLeadingHelpFlag, parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
@@ -28,10 +28,12 @@ import {
   filterJobsForCurrentClaudeSession,
   findLatestResumableTaskJob,
   getCurrentClaudeSessionId,
+  handleAwaitResultCommand,
   handleCancelCommand,
   handleResultCommand,
   handleStatusCommand,
-  handleTaskResumeCandidateCommand
+  handleTaskResumeCandidateCommand,
+  waitForExactJobSnapshot
 } from "./lib/job-commands.mjs";
 import { resolveModelControls } from "./lib/model-resolution.mjs";
 import { binaryAvailable, getProcessStartTime } from "./lib/process.mjs";
@@ -66,6 +68,7 @@ import {
   renderNativeReviewResult,
   renderReviewResult,
   renderSetupReport,
+  renderStoredJobResult,
   renderTaskResult
 } from "./lib/render.mjs";
 
@@ -75,23 +78,78 @@ const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude t
 /** Router directives supported on analyze/exec turn modes only. */
 const TURN_ONLY_ROUTER_DIRECTIVES = new Set(["search", "docs", "tool", "parallel"]);
 
-function printUsage() {
-  console.log(
-    [
-      "Usage:",
-      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
-      "  node scripts/codex-companion.mjs models [--all] [--json]",
-      "  node scripts/codex-companion.mjs analyze [--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
-      "  node scripts/codex-companion.mjs exec [--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
-      "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
-      "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
-      "  node scripts/codex-companion.mjs result [job-id] [--json]",
-      "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
-      "  node scripts/codex-companion.mjs cli <codex args...>"
-    ].join("\n")
-  );
+const PUBLIC_COMMANDS = [
+  "setup",
+  "models",
+  "analyze",
+  "exec",
+  "review",
+  "adversarial-review",
+  "task",
+  "status",
+  "result",
+  "cancel",
+  "cli"
+];
+
+const COMMAND_USAGE = {
+  setup: "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
+  models: "  node scripts/codex-companion.mjs models [--all] [--json]",
+  analyze:
+    "  node scripts/codex-companion.mjs analyze [--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+  exec:
+    "  node scripts/codex-companion.mjs exec [--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+  review:
+    "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>]",
+  "adversarial-review":
+    "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus text]",
+  task:
+    "  node scripts/codex-companion.mjs task [--wait|--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+  status: "  node scripts/codex-companion.mjs status [job-id] [--wait] [--timeout-ms <ms>] [--all] [--json]",
+  "await-result": "  node scripts/codex-companion.mjs await-result <job-id> [--timeout-ms <ms>] [--json]",
+  result: "  node scripts/codex-companion.mjs result [job-id] [--json]",
+  cancel: "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
+  cli: "  node scripts/codex-companion.mjs cli <codex args...>"
+};
+
+const COMMAND_HELP_NOTES = {
+  analyze: [
+    "  Leading --wait and --background are mutually exclusive execution flags.",
+    "  Options are parsed only before the prompt begins. Use -- to end options."
+  ],
+  exec: [
+    "  Leading --wait and --background are mutually exclusive execution flags.",
+    "  Options are parsed only before the prompt begins. Use -- to end options."
+  ],
+  task: [
+    "  Leading --wait and --background are mutually exclusive execution flags.",
+    "  Options are parsed only before the prompt begins. Use -- to end options."
+  ],
+  review: [
+    "  Leading --wait and --background are mutually exclusive execution flags.",
+    "  Options are parsed only before focus text begins. Use -- to end options."
+  ],
+  "adversarial-review": [
+    "  Leading --wait and --background are mutually exclusive execution flags.",
+    "  Options are parsed only before focus text begins. Use -- to end options."
+  ],
+  "await-result": [
+    "  Internal host-tracked completion watcher. Not a user-facing slash command.",
+    "  Emits one terminal-status nudge. Full output stays on the result command."
+  ]
+};
+
+function printUsage(command) {
+  const lines = ["Usage:"];
+  if (command && COMMAND_USAGE[command]) {
+    lines.push(COMMAND_USAGE[command]);
+    lines.push(...(COMMAND_HELP_NOTES[command] ?? []));
+  } else {
+    for (const name of PUBLIC_COMMANDS) {
+      lines.push(COMMAND_USAGE[name]);
+    }
+  }
+  console.log(lines.join("\n"));
 }
 
 function outputResult(value, asJson) {
@@ -117,23 +175,25 @@ function normalizeArgv(argv) {
   return argv;
 }
 
+function hasHelpFlag(argv) {
+  return hasLeadingHelpFlag(normalizeArgv(argv));
+}
+
+function validateExecutionModeFlags(options = {}) {
+  if (options.background && options.wait) {
+    throw new Error("Choose either --background or --wait, not both.");
+  }
+}
+
 /**
  * Review modes do not support analyze/exec routing directives. Fail explicitly
  * instead of treating flags such as `--docs` as free-form focus text.
- * @param {string[]} argv
+ * @param {object} options
  * @param {string} commandLabel
  */
-function rejectUnsupportedReviewDirectives(argv, commandLabel) {
-  const tokens = normalizeArgv(argv);
-  for (const token of tokens) {
-    if (token === "--") {
-      break;
-    }
-    if (!token.startsWith("--") || token === "--") {
-      continue;
-    }
-    const [rawKey] = token.slice(2).split("=", 2);
-    if (TURN_ONLY_ROUTER_DIRECTIVES.has(rawKey)) {
+function rejectUnsupportedReviewDirectives(options, commandLabel) {
+  for (const rawKey of TURN_ONLY_ROUTER_DIRECTIVES) {
+    if (options[rawKey]) {
       throw new Error(
         `${commandLabel} does not support --${rawKey}. ` +
           "Use /codex-router:analyze or /codex-router:exec for Codex-native routing directives " +
@@ -651,7 +711,7 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /codex-router:status ${payload.jobId} for progress.\n`;
+  return `${payload.title} started in the background as ${payload.jobId}. Check /codex-router:status ${payload.jobId} for progress. Full output will not appear automatically; run /codex-router:result ${payload.jobId} after completion. Ending the originating session marks the job failed.\n`;
 }
 
 function getJobKindLabel(kind, jobClass) {
@@ -855,17 +915,19 @@ function enqueueBackgroundTask(cwd, job, request) {
 async function handleReviewCommand(argv, config) {
   const commandLabel =
     config.reviewName === "Adversarial Review" ? "/codex-router:adversarial-review" : "/codex-router:review";
-  rejectUnsupportedReviewDirectives(argv, commandLabel);
 
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["base", "scope", "model", "cwd", "effort"],
     arrayOptions: ["config", "enable", "disable"],
-    booleanOptions: ["json", "background", "wait", "best", "fast", "spark"],
+    booleanOptions: ["json", "background", "wait", "best", "fast", "spark", "search", "docs", "parallel", "tool"],
     aliasMap: {
       m: "model",
       c: "config"
-    }
+    },
+    stopAtPositional: true
   });
+  validateExecutionModeFlags(options);
+  rejectUnsupportedReviewDirectives(options, commandLabel);
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
@@ -944,12 +1006,14 @@ async function handleRouterTurn(argv, mode) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", "tool"],
     arrayOptions: ["config", "enable", "disable"],
-    booleanOptions: ["json", "background", "search", "docs", "parallel", "best", "fast", "spark", "resume-last", "resume", "fresh"],
+    booleanOptions: ["json", "background", "wait", "search", "docs", "parallel", "best", "fast", "spark", "resume-last", "resume", "fresh"],
     aliasMap: {
       m: "model",
       c: "config"
-    }
+    },
+    stopAtPositional: true
   });
+  validateExecutionModeFlags(options);
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
@@ -1051,12 +1115,17 @@ async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file"],
     arrayOptions: ["config", "enable", "disable"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", "wait", "watch"],
     aliasMap: {
       m: "model",
       c: "config"
-    }
+    },
+    stopAtPositional: true
   });
+  validateExecutionModeFlags(options);
+  if (options.watch && (options.background || options.wait)) {
+    throw new Error("Internal --watch cannot be combined with --background or --wait.");
+  }
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
@@ -1084,7 +1153,7 @@ async function handleTask(argv) {
     process.stderr.write(`${modelWarning}\n`);
   }
 
-  if (options.background) {
+  if (options.background || options.watch) {
     ensureCodexAvailable(cwd);
     requireTaskRequest(prompt, resumeLast);
 
@@ -1100,6 +1169,25 @@ async function handleTask(argv) {
       configArgs
     };
     const { payload } = enqueueBackgroundTask(cwd, job, request);
+    if (options.watch) {
+      // The watcher and worker have deliberately separate lifetimes. If the
+      // host Bash call expires, it can terminate this process without sending
+      // a signal to the detached worker. The exact job id remains available to
+      // status/result and is the only record this watcher reconciles.
+      process.stderr.write(
+        `Codex rescue started as ${job.id}; watcher expiration will not cancel the active job.\n`
+      );
+      const snapshot = await waitForExactJobSnapshot(cwd, job.id);
+      if (snapshot.waitTimedOut) {
+        throw new Error(
+          `Stopped watching Codex job ${job.id} after ${snapshot.timeoutMs}ms; ` +
+            `it is still ${snapshot.job.status} and was not cancelled.`
+        );
+      }
+      const storedJob = readStoredJob(workspaceRoot, job.id);
+      outputResult(options.json ? { job: snapshot.job, storedJob } : renderStoredJobResult(snapshot.job, storedJob), options.json);
+      return;
+    }
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
   }
@@ -1169,8 +1257,26 @@ async function handleTaskWorker(argv) {
 
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
-  if (!subcommand || subcommand === "help" || subcommand === "--help") {
+  if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
     printUsage();
+    return;
+  }
+
+  const helpAwareCommands = new Set([
+    "setup",
+    "models",
+    "analyze",
+    "exec",
+    "review",
+    "adversarial-review",
+    "task",
+    "status",
+    "await-result",
+    "result",
+    "cancel"
+  ]);
+  if (helpAwareCommands.has(subcommand) && hasHelpFlag(argv)) {
+    printUsage(subcommand);
     return;
   }
 
@@ -1203,6 +1309,9 @@ async function main() {
       break;
     case "status":
       await handleStatusCommand(argv);
+      break;
+    case "await-result":
+      await handleAwaitResultCommand(argv);
       break;
     case "result":
       handleResultCommand(argv);

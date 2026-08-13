@@ -6,17 +6,20 @@ allowed-tools: Bash(node:*), AskUserQuestion, Agent
 
 Invoke the `codex-router:codex-rescue` subagent via the `Agent` tool (`subagent_type: "codex-router:codex-rescue"`), forwarding the raw user request as the prompt.
 `codex-router:codex-rescue` is a subagent, not a skill — do not call `Skill(codex-router:codex-rescue)` (no such skill) or `Skill(codex-router:rescue)` (that re-enters this command and hangs the session). The command runs inline so the `Agent` tool stays in scope; forked general-purpose subagents do not expose it.
-The final user-visible response must be Codex's output verbatim.
+For foreground execution, the final user-visible response must be Codex's output verbatim. For background execution, the launch acknowledgement may be concise; when the subagent completion arrives, surface Codex's output verbatim.
 
 Raw user request:
 $ARGUMENTS
 
 Execution mode:
 
+- If the request includes both `--background` and `--wait`, stop with an error and do not invoke the subagent.
 - If the request includes `--background`, run the `codex-router:codex-rescue` subagent in the background.
 - If the request includes `--wait`, run the `codex-router:codex-rescue` subagent in the foreground.
 - If neither flag is present, default to foreground.
-- `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
+- `--background` and `--wait` control only whether Claude Code runs the subagent in the background or foreground. Do not forward either flag to `task`, and do not treat them as part of the natural-language task text.
+- The subagent must always invoke the internal `task --watch` mode. That mode launches a detached tracked worker, captures its exact job id, and watches only that authorized job.
+- A Bash or subagent timeout ends only the watcher. It must never cancel, kill, or mark the detached Codex worker failed while the tracked job remains active.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
 - `-c`/`--config`, `--enable`, and `--disable` are Codex config controls. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
@@ -39,9 +42,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task-resume-candidate -
 
 Operating rules:
 
-- The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...` and return that command's stdout as-is.
-- Return the Codex companion stdout verbatim to the user.
-- Do not paraphrase, summarize, rewrite, or add commentary before or after it.
+- The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --watch ...` and return that command's stdout as-is when the watcher reaches a terminal job state.
+- Never let the subagent add `--background` to `task`; `--watch` owns the detached-worker lifecycle.
+- Return the Codex companion stdout verbatim to the user when the watched job finishes.
+- Do not paraphrase, summarize, rewrite, or add commentary before or after successful output.
+- If the Bash watcher expires after printing `Codex rescue started as <job-id>`, report that exact id and `/codex-router:result <job-id>`; state that the active job was not cancelled. Do not start another job.
 - Do not ask the subagent to inspect files, monitor progress, poll `/codex-router:status`, fetch `/codex-router:result`, call `/codex-router:cancel`, summarize output, or do follow-up work of its own.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.
 - Leave the model unset unless the user explicitly asks for one. If they ask for `spark`, map it to `gpt-5.3-codex-spark`.

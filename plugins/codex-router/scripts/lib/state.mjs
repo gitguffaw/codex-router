@@ -12,7 +12,6 @@ const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-router");
 const STATE_FILE_NAME = "state.json";
 const STATE_LOCK_FILE_NAME = "state.lock";
 const JOBS_DIR_NAME = "jobs";
-const MAX_JOBS = 50;
 const STATE_LOCK_TIMEOUT_MS = 2000;
 const STATE_LOCK_RETRY_MS = 25;
 const STATE_LOCK_STALE_MS = 10000;
@@ -79,18 +78,6 @@ export function loadState(cwd) {
     };
   } catch {
     return defaultState();
-  }
-}
-
-function pruneJobs(jobs) {
-  return [...jobs]
-    .sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")))
-    .slice(0, MAX_JOBS);
-}
-
-function removeFileIfExists(filePath) {
-  if (filePath && fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
   }
 }
 
@@ -233,9 +220,8 @@ function withStateLock(cwd, fn) {
 }
 
 function saveStateLocked(cwd, state) {
-  const previousJobs = loadState(cwd).jobs;
   ensureStateDir(cwd);
-  const nextJobs = pruneJobs(state.jobs ?? []);
+  const nextJobs = [...(state.jobs ?? [])];
   const nextState = {
     version: STATE_VERSION,
     config: {
@@ -244,15 +230,6 @@ function saveStateLocked(cwd, state) {
     },
     jobs: nextJobs
   };
-
-  const retainedIds = new Set(nextJobs.map((job) => job.id));
-  for (const job of previousJobs) {
-    if (retainedIds.has(job.id)) {
-      continue;
-    }
-    removeJobFile(resolveJobFile(cwd, job.id));
-    removeFileIfExists(job.logFile);
-  }
 
   const stateFile = resolveStateFile(cwd);
   const tempFile = `${stateFile}.tmp-${process.pid}`;
@@ -330,8 +307,8 @@ export function listJobs(cwd) {
 // By default a job with no index entry is NOT written: for cancel/reconcile,
 // patching only the job file would recreate a dangling file the index no longer
 // tracks. The owning runtime is authoritative for its own job, so it passes
-// `options.allowInsert` (with `options.insertBase`) to re-add an entry the
-// pruner evicted mid-run, rather than silently dropping its own result.
+// `options.allowInsert` (with `options.insertBase`) to recover from a missing
+// index entry rather than silently dropping its own result.
 export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
   assertValidJobId(jobId);
   return withStateLock(cwd, () => {
@@ -411,12 +388,6 @@ export function writeJobFile(cwd, jobId, payload) {
 
 export function readJobFile(jobFile) {
   return JSON.parse(fs.readFileSync(jobFile, "utf8"));
-}
-
-function removeJobFile(jobFile) {
-  if (fs.existsSync(jobFile)) {
-    fs.unlinkSync(jobFile);
-  }
 }
 
 export function resolveJobLogFile(cwd, jobId) {

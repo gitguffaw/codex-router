@@ -9,10 +9,10 @@ user-invocable: false
 Use this skill only inside the `codex-router:codex-rescue` subagent.
 
 Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task "<raw arguments>"`
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --watch "<raw arguments>"`
 
 Execution rules:
-- The rescue subagent is a forwarder, not an orchestrator. Its only job is to invoke `task` once and return that stdout unchanged.
+- The rescue subagent is a forwarder, not an orchestrator. Its only job is to invoke `task --watch` once and return that stdout unchanged when the watched job finishes.
 - Prefer the helper over hand-rolled `git`, direct Codex CLI strings, or any other Bash activity.
 - Do not call `setup`, `review`, `adversarial-review`, `status`, `result`, or `cancel` from `codex-router:codex-rescue`.
 - Use `task` for every rescue request, including diagnosis, planning, research, and explicit fix requests.
@@ -26,6 +26,8 @@ Execution rules:
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
+- Always call internal `task --watch` without `--background`. The outer command backgrounds the rescue subagent when requested. `--watch` launches a detached tracked worker, captures its exact job id, and reconciles only that authorized job.
+- The watcher may expire, but the active worker must continue. Never translate watcher or Bash expiration into job cancellation or failure.
 - If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `-c`/`--config`, `--enable`, or `--disable`, pass those controls through to `task`.
@@ -40,5 +42,6 @@ Safety rules:
 - Default to write-capable Codex work in `codex-router:codex-rescue` unless the user explicitly asks for read-only behavior.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
-- Return the stdout of the `task` command exactly as-is.
-- If the Bash call fails or Codex cannot be invoked, return nothing.
+- Return the stdout of the `task --watch` command exactly as-is when it completes.
+- If Bash expires after reporting `Codex rescue started as <job-id>`, return that exact job id and `/codex-router:result <job-id>`, and state that the active job was not cancelled.
+- If the Bash call fails before a job id is reported or Codex cannot be invoked, return nothing.

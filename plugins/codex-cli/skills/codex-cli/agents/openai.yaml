@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex CLI"
+  short_description: "Drive Codex directly through its native CLI"
+  default_prompt: "Use $codex-cli to have Codex review the current pull request with the strongest requested model and effort."

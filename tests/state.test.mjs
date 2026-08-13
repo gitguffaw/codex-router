@@ -6,7 +6,14 @@ import assert from "node:assert/strict";
 
 import { makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
-import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
+import {
+  finalizeJob,
+  resolveJobFile,
+  resolveJobLogFile,
+  resolveStateDir,
+  resolveStateFile,
+  saveState
+} from "../plugins/codex-router/scripts/lib/state.mjs";
 
 function writeLockFile(lockFile, holder) {
   fs.writeFileSync(lockFile, `${JSON.stringify(holder)}\n`, "utf8");
@@ -45,7 +52,7 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
   }
 });
 
-test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {
+test("saveState retains every indexed job and artifact without a count cap", () => {
   const workspace = makeTempDir();
   const stateFile = resolveStateFile(workspace);
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
@@ -86,29 +93,85 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
     jobs
   });
 
-  const prunedJobFile = resolveJobFile(workspace, "job-0");
-  const prunedLogFile = resolveJobLogFile(workspace, "job-0");
+  const oldestJobFile = resolveJobFile(workspace, "job-0");
+  const oldestLogFile = resolveJobLogFile(workspace, "job-0");
   const retainedJobFile = resolveJobFile(workspace, "job-50");
   const retainedLogFile = resolveJobLogFile(workspace, "job-50");
-  const jobsDir = path.dirname(prunedJobFile);
+  const jobsDir = path.dirname(oldestJobFile);
 
   assert.equal(fs.existsSync(retainedJobFile), true);
   assert.equal(fs.existsSync(retainedLogFile), true);
-  assert.equal(fs.existsSync(prunedJobFile), false);
-  assert.equal(fs.existsSync(prunedLogFile), false);
+  assert.equal(fs.existsSync(oldestJobFile), true);
+  assert.equal(fs.existsSync(oldestLogFile), true);
 
   const savedState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  assert.equal(savedState.jobs.length, 50);
+  assert.equal(savedState.jobs.length, 51);
   assert.deepEqual(
     savedState.jobs.map((job) => job.id),
-    Array.from({ length: 50 }, (_, index) => `job-${50 - index}`)
+    Array.from({ length: 51 }, (_, index) => `job-${index}`)
   );
   assert.deepEqual(
     fs.readdirSync(jobsDir).sort(),
-    Array.from({ length: 50 }, (_, index) => `job-${index + 1}`)
+    Array.from({ length: 51 }, (_, index) => `job-${index}`)
       .flatMap((jobId) => [`${jobId}.json`, `${jobId}.log`])
       .sort()
   );
+});
+
+test("finalizeJob retains a completed result while many other jobs remain active", () => {
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+
+  const completingId = "task-completing";
+  const completingLog = resolveJobLogFile(workspace, completingId);
+  const completingFile = resolveJobFile(workspace, completingId);
+  fs.writeFileSync(completingLog, "running\n", "utf8");
+  fs.writeFileSync(completingFile, JSON.stringify({ id: completingId, status: "running" }, null, 2), "utf8");
+
+  const jobs = [
+    {
+      id: completingId,
+      status: "running",
+      logFile: completingLog,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z"
+    }
+  ];
+  for (let index = 0; index < 50; index += 1) {
+    const jobId = `job-${index}`;
+    const updatedAt = new Date(Date.UTC(2026, 0, 2, 0, index, 0)).toISOString();
+    jobs.push({
+      id: jobId,
+      status: "running",
+      updatedAt,
+      createdAt: updatedAt
+    });
+  }
+
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs
+  });
+
+  const outcome = finalizeJob(
+    workspace,
+    completingId,
+    {
+      $index: { status: "completed", completedAt: "2026-01-02T01:00:00.000Z" },
+      $file: { status: "completed", rendered: "important result\n" }
+    },
+    { storedFallback: jobs[0] }
+  );
+
+  const savedState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  assert.equal(outcome.applied, true);
+  assert.equal(savedState.jobs.length, 51);
+  assert.equal(savedState.jobs.find((job) => job.id === completingId)?.status, "completed");
+  assert.equal(fs.existsSync(completingFile), true);
+  assert.equal(fs.existsSync(completingLog), true);
+  assert.equal(JSON.parse(fs.readFileSync(completingFile, "utf8")).rendered, "important result\n");
 });
 
 test("saveState does not reclaim a fresh half-written (empty) state lock", () => {
@@ -319,14 +382,14 @@ test("finalizeJob refuses to write when the index entry is gone", async () => {
 
   const outcome = finalizeJob(
     workspace,
-    "task-pruned",
+    "task-missing",
     { status: "failed" },
-    { storedFallback: { id: "task-pruned", title: "Codex Task" } }
+    { storedFallback: { id: "task-missing", title: "Codex Task" } }
   );
 
   assert.equal(outcome.applied, false);
   assert.equal(outcome.entry, null);
-  assert.equal(fs.existsSync(resolveJobFile(workspace, "task-pruned")), false);
+  assert.equal(fs.existsSync(resolveJobFile(workspace, "task-missing")), false);
   assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs, []);
 });
 

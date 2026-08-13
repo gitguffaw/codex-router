@@ -18,6 +18,7 @@ Core constraint:
 - Do not pass `--search`, `--docs`, `--tool`, or `--parallel`. Those analyze/exec routing directives are unsupported on review and the companion runtime fails them explicitly.
 
 Execution mode rules:
+- If the raw arguments include both `--wait` and `--background`, stop with an error and do not invoke the companion runtime.
 - If the raw arguments include `--wait`, do not ask. Run the review in the foreground.
 - If the raw arguments include `--background`, do not ask. Run the review in a Claude background task.
 - Otherwise, estimate the review size before asking:

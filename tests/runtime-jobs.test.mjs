@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
@@ -25,7 +26,28 @@ async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
   throw new Error("Timed out waiting for condition.");
 }
 
-test("task --background enqueues a detached worker and exposes per-job status", async () => {
+function runAsync(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+test("task --background enqueues a detached worker and await-result emits one concise completion nudge", async () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "slow-task");
@@ -34,32 +56,36 @@ test("task --background enqueues a detached worker and exposes per-job status", 
   run("git", ["add", "README.md"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
-  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the failing test"], {
+  const launched = run("node", [SCRIPT, "task", "--background", "investigate the failing test"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
 
   assert.equal(launched.status, 0, launched.stderr);
-  const launchPayload = JSON.parse(launched.stdout);
-  assert.equal(launchPayload.status, "queued");
-  assert.match(launchPayload.jobId, /^task-/);
+  const jobId = launched.stdout.match(/\b(task-[a-z0-9-]+)\b/)?.[1];
+  assert.match(jobId ?? "", /^task-/);
+  assert.match(launched.stdout, /Full output will not appear automatically/i);
+  assert.match(launched.stdout, new RegExp(`/codex-router:result ${jobId}`));
+  assert.match(launched.stdout, /Ending the originating session marks the job failed/i);
 
-  const waitedStatus = run(
+  const notification = run(
     "node",
-    [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"],
+    [SCRIPT, "await-result", jobId, "--timeout-ms", "15000"],
     {
       cwd: repo,
       env: buildEnv(binDir)
     }
   );
 
-  assert.equal(waitedStatus.status, 0, waitedStatus.stderr);
-  const waitedPayload = JSON.parse(waitedStatus.stdout);
-  assert.equal(waitedPayload.job.id, launchPayload.jobId);
-  assert.equal(waitedPayload.job.status, "completed");
+  assert.equal(notification.status, 0, notification.stderr);
+  assert.equal(
+    notification.stdout,
+    `Codex job ${jobId} finished with status completed. Run /codex-router:result ${jobId} to view the full result.\n`
+  );
+  assert.doesNotMatch(notification.stdout, /Handled the requested task/);
 
   const resultPayload = await waitFor(() => {
-    const result = run("node", [SCRIPT, "result", launchPayload.jobId, "--json"], {
+    const result = run("node", [SCRIPT, "result", jobId, "--json"], {
       cwd: repo,
       env: buildEnv(binDir)
     });
@@ -69,9 +95,115 @@ test("task --background enqueues a detached worker and exposes per-job status", 
     return JSON.parse(result.stdout);
   });
 
-  assert.equal(resultPayload.job.id, launchPayload.jobId);
+  assert.equal(resultPayload.job.id, jobId);
   assert.equal(resultPayload.job.status, "completed");
   assert.match(resultPayload.storedJob.rendered, /Handled the requested task/);
+});
+
+test("task --watch returns the detached worker's final output", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "review-ok");
+  initGitRepo(repo);
+
+  const watched = run("node", [SCRIPT, "task", "--watch", "inspect the failure"], {
+    cwd: repo,
+    env: buildEnv(binDir),
+    timeout: 15_000
+  });
+
+  assert.equal(watched.status, 0, watched.stderr);
+  assert.match(watched.stderr, /Codex rescue started as task-[a-z0-9-]+/);
+  assert.match(watched.stdout, /Handled the requested task/);
+  assert.doesNotMatch(watched.stdout, /started in the background/);
+});
+
+test("task --watch leaves its detached worker running when the watcher is terminated", async (t) => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "interruptible-slow-task");
+  initGitRepo(repo);
+
+  // POSIX host timeouts typically terminate the watcher's whole process group.
+  // Isolate the watcher so that group kill cannot reach the separately detached
+  // worker. Windows has no equivalent group-kill API here, so fall back to the
+  // watcher PID.
+  const isolateWatcherGroup = process.platform !== "win32";
+  const watcher = spawn("node", [SCRIPT, "task", "--watch", "--write", "finish after the watcher exits"], {
+    cwd: repo,
+    env: buildEnv(binDir),
+    windowsHide: true,
+    detached: isolateWatcherGroup
+  });
+  t.after(() => {
+    if (watcher.exitCode !== null || watcher.signalCode !== null) {
+      return;
+    }
+    try {
+      if (isolateWatcherGroup) {
+        process.kill(-watcher.pid, "SIGKILL");
+      } else {
+        watcher.kill("SIGKILL");
+      }
+    } catch {
+      // Watcher already exited.
+    }
+  });
+  let watcherStderr = "";
+  watcher.stderr.setEncoding("utf8");
+  watcher.stderr.on("data", (chunk) => {
+    watcherStderr += chunk;
+  });
+  // Drain stdout so a successful watcher can never block on a full pipe while
+  // this regression test is arranging the forced watcher exit.
+  watcher.stdout.resume();
+  const watcherClosed = new Promise((resolve) => {
+    watcher.on("close", (status, signal) => resolve({ status, signal }));
+  });
+
+  const jobId = await waitFor(
+    () => watcherStderr.match(/Codex rescue started as (task-[a-z0-9-]+)/)?.[1] ?? null,
+    { timeoutMs: 15_000 }
+  );
+  const activeBeforeTimeout = await waitFor(
+    () => {
+      const job = listJobs(repo).find((entry) => entry.id === jobId);
+      return job?.status === "running" ? job : null;
+    },
+    { timeoutMs: 15_000 }
+  );
+  assert.notEqual(activeBeforeTimeout.pid, watcher.pid, "the watcher must not own the worker process");
+
+  if (isolateWatcherGroup) {
+    process.kill(-watcher.pid, "SIGTERM");
+  } else {
+    watcher.kill("SIGTERM");
+  }
+  const watcherExit = await watcherClosed;
+  if (isolateWatcherGroup) {
+    assert.equal(watcherExit.signal, "SIGTERM");
+  }
+
+  const activeAfterTimeout = listJobs(repo).find((entry) => entry.id === jobId);
+  assert.equal(activeAfterTimeout?.status, "running", "watcher expiration must not finalize the active job");
+  assert.equal(activeAfterTimeout?.pid, activeBeforeTimeout.pid, "the detached worker identity must remain unchanged");
+  assert.doesNotThrow(
+    () => process.kill(activeBeforeTimeout.pid, 0),
+    "the detached worker must survive watcher process-group termination"
+  );
+
+  const completed = await waitFor(
+    () => {
+      const job = listJobs(repo).find((entry) => entry.id === jobId);
+      return job?.status === "completed" ? job : null;
+    },
+    { timeoutMs: 15_000 }
+  );
+  assert.equal(completed.pid, null);
+
+  const result = run("node", [SCRIPT, "result", jobId], { cwd: repo, env: buildEnv(binDir) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Handled the requested task/);
 });
 
 test("review with focus text promotes to adversarial review", () => {
@@ -677,6 +809,199 @@ test("owner completion commits both records atomically when it wins the race", a
   assert.equal(stored.rendered, "Finished the task.\n");
 });
 
+test("active tracked jobs refresh a heartbeat without imposing a runtime deadline", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-heartbeat";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  let firstHeartbeat = null;
+  let refreshedHeartbeat = null;
+  await runTrackedJob(
+    { id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" },
+    async () => {
+      firstHeartbeat = listJobs(workspace).find((entry) => entry.id === jobId)?.heartbeatAt;
+      refreshedHeartbeat = await waitFor(
+        () => {
+          const heartbeatAt = listJobs(workspace).find((entry) => entry.id === jobId)?.heartbeatAt;
+          return heartbeatAt && heartbeatAt !== firstHeartbeat ? heartbeatAt : null;
+        },
+        { timeoutMs: 1000, intervalMs: 10 }
+      );
+      return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "done", warnings: [] };
+    },
+    { heartbeatIntervalMs: 20 }
+  );
+
+  assert.ok(firstHeartbeat);
+  assert.ok(refreshedHeartbeat);
+  const completed = listJobs(workspace).find((entry) => entry.id === jobId);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.pid, null);
+  assert.ok(completed.heartbeatAt);
+});
+
+function assertReconstructedRunningRecord(stored, owner) {
+  assert.equal(stored.id, owner.id);
+  assert.equal(stored.status, "running");
+  assert.equal(stored.title, owner.title);
+  assert.equal(stored.jobClass, owner.jobClass);
+  assert.equal(stored.summary, owner.summary);
+  assert.equal(stored.workspaceRoot, owner.workspaceRoot);
+  assert.equal(stored.pid, owner.pid);
+  assert.equal(stored.processStartTime, owner.processStartTime);
+  assert.equal(stored.startedAt, owner.startedAt);
+  assert.ok(stored.heartbeatAt);
+  assert.notEqual(Object.keys(stored).sort().join(","), "heartbeatAt");
+}
+
+test("heartbeat reconstructs a missing or corrupt job file with the complete running record", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-heartbeat-rebuild";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  const job = {
+    id: jobId,
+    workspaceRoot: workspace,
+    title: "Codex Task",
+    jobClass: "task",
+    summary: "Investigate flaky test"
+  };
+
+  await runTrackedJob(
+    job,
+    async () => {
+      const jobFile = resolveJobFile(workspace, jobId);
+      const owner = listJobs(workspace).find((entry) => entry.id === jobId);
+      assert.equal(owner?.status, "running");
+
+      for (const mutate of [
+        () => {
+          fs.unlinkSync(jobFile);
+        },
+        () => {
+          fs.writeFileSync(jobFile, "{not-json", "utf8");
+        }
+      ]) {
+        mutate();
+        const stored = await waitFor(
+          () => {
+            if (!fs.existsSync(jobFile)) {
+              return null;
+            }
+            try {
+              const parsed = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+              return parsed.id === jobId && parsed.pid === owner.pid && parsed.heartbeatAt ? parsed : null;
+            } catch {
+              return null;
+            }
+          },
+          { timeoutMs: 1000, intervalMs: 10 }
+        );
+        assertReconstructedRunningRecord(stored, owner);
+      }
+
+      return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "done", warnings: [] };
+    },
+    { heartbeatIntervalMs: 20 }
+  );
+});
+
+test("heartbeat does not resurrect or overwrite a cancelled job", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-heartbeat-cancelled";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  await runTrackedJob(
+    { id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" },
+    async () => {
+      await waitFor(
+        () => {
+          const heartbeatAt = listJobs(workspace).find((entry) => entry.id === jobId)?.heartbeatAt;
+          const startedAt = listJobs(workspace).find((entry) => entry.id === jobId)?.startedAt;
+          return heartbeatAt && startedAt && heartbeatAt !== startedAt ? heartbeatAt : null;
+        },
+        { timeoutMs: 1000, intervalMs: 10 }
+      );
+
+      finalizeJob(workspace, jobId, {
+        status: "cancelled",
+        phase: "cancelled",
+        pid: null,
+        errorMessage: "Cancelled by user."
+      });
+
+      const stateFile = path.join(resolveStateDir(workspace), "state.json");
+      const jobFile = resolveJobFile(workspace, jobId);
+      const frozenState = fs.readFileSync(stateFile, "utf8");
+      const frozenJob = fs.readFileSync(jobFile, "utf8");
+
+      await new Promise((resolve) => setTimeout(resolve, 160));
+
+      assert.equal(fs.readFileSync(stateFile, "utf8"), frozenState);
+      assert.equal(fs.readFileSync(jobFile, "utf8"), frozenJob);
+      assert.equal(listJobs(workspace).find((entry) => entry.id === jobId)?.status, "cancelled");
+
+      return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "done", warnings: [] };
+    },
+    { heartbeatIntervalMs: 20 }
+  );
+});
+
+test("heartbeat does not reinsert a missing index entry", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-heartbeat-missing-index";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  await runTrackedJob(
+    { id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" },
+    async () => {
+      await waitFor(
+        () => {
+          const heartbeatAt = listJobs(workspace).find((entry) => entry.id === jobId)?.heartbeatAt;
+          const startedAt = listJobs(workspace).find((entry) => entry.id === jobId)?.startedAt;
+          return heartbeatAt && startedAt && heartbeatAt !== startedAt ? heartbeatAt : null;
+        },
+        { timeoutMs: 1000, intervalMs: 10 }
+      );
+
+      saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+      const stateFile = path.join(resolveStateDir(workspace), "state.json");
+      const jobFile = resolveJobFile(workspace, jobId);
+      const frozenState = fs.readFileSync(stateFile, "utf8");
+      const frozenJob = fs.readFileSync(jobFile, "utf8");
+
+      await new Promise((resolve) => setTimeout(resolve, 160));
+
+      assert.equal(fs.readFileSync(stateFile, "utf8"), frozenState);
+      assert.equal(fs.readFileSync(jobFile, "utf8"), frozenJob);
+      assert.equal(
+        listJobs(workspace).find((entry) => entry.id === jobId),
+        undefined,
+        "a heartbeat must not reinsert a vanished index entry"
+      );
+
+      return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "done", warnings: [] };
+    },
+    { heartbeatIntervalMs: 20 }
+  );
+});
+
 test("owner refuses to resurrect a job cancelled before it starts", async () => {
   const workspace = makeTempDir();
   const jobId = "task-precancelled";
@@ -701,9 +1026,9 @@ test("owner refuses to resurrect a job cancelled before it starts", async () => 
   assert.equal(listJobs(workspace).find((entry) => entry.id === jobId).status, "cancelled");
 });
 
-test("owner re-inserts its result when the pruner evicts the job mid-run", async () => {
+test("owner re-inserts its result when the index entry disappears mid-run", async () => {
   const workspace = makeTempDir();
-  const jobId = "task-evicted";
+  const jobId = "task-missing-index";
   saveState(workspace, {
     version: 1,
     config: { stopReviewGate: false },
@@ -711,7 +1036,7 @@ test("owner re-inserts its result when the pruner evicts the job mid-run", async
   });
 
   const runner = async () => {
-    // Simulate the 50-job pruner evicting this job while it runs.
+    // Simulate unexpected state loss while the job runs.
     saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
     return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "did the work", warnings: [] };
   };
@@ -809,4 +1134,327 @@ test("status --wait times out cleanly when a job is still active", () => {
   assert.equal(payload.job.id, "task-live");
   assert.equal(payload.job.status, "running");
   assert.equal(payload.waitTimedOut, true);
+});
+
+test("await-result nudges for every terminal status without exposing stored output", () => {
+  const terminalStatuses = [
+    "completed",
+    "completed-with-warnings",
+    "blocked",
+    "failed",
+    "interrupted",
+    "cancelled"
+  ];
+
+  for (const status of terminalStatuses) {
+    const workspace = makeTempDir();
+    const jobId = `task-${status}`;
+    saveState(workspace, {
+      version: 1,
+      config: { stopReviewGate: false },
+      jobs: [
+        {
+          id: jobId,
+          status,
+          title: "Codex Task",
+          sessionId: "session-a",
+          rendered: "secret full output",
+          createdAt: "2026-08-12T20:00:00.000Z",
+          completedAt: "2026-08-12T20:01:00.000Z"
+        }
+      ]
+    });
+
+    const result = run("node", [SCRIPT, "await-result", jobId], {
+      cwd: workspace,
+      env: { ...process.env, CODEX_COMPANION_SESSION_ID: "session-a" }
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      result.stdout,
+      `Codex job ${jobId} finished with status ${status}. Run /codex-router:result ${jobId} to view the full result.\n`
+    );
+    assert.doesNotMatch(result.stdout, /secret full output/);
+  }
+});
+
+test("await-result keeps completion nudges isolated to the originating Claude session", () => {
+  const workspace = makeTempDir();
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [
+      {
+        id: "task-session-a",
+        status: "completed",
+        title: "Codex Task",
+        sessionId: "session-a",
+        createdAt: "2026-08-12T20:00:00.000Z",
+        completedAt: "2026-08-12T20:01:00.000Z"
+      },
+      {
+        id: "task-session-b",
+        status: "completed",
+        title: "Codex Task",
+        sessionId: "session-b",
+        createdAt: "2026-08-12T20:00:00.000Z",
+        completedAt: "2026-08-12T20:01:00.000Z"
+      },
+      {
+        id: "task-session-b-running",
+        status: "running",
+        title: "Codex Task",
+        sessionId: "session-b",
+        pid: 99999999,
+        createdAt: "2026-08-12T20:00:00.000Z"
+      }
+    ]
+  });
+
+  const own = run("node", [SCRIPT, "await-result", "task-session-a"], {
+    cwd: workspace,
+    env: { ...process.env, CODEX_COMPANION_SESSION_ID: "session-a" }
+  });
+  const other = run("node", [SCRIPT, "await-result", "task-session-b"], {
+    cwd: workspace,
+    env: { ...process.env, CODEX_COMPANION_SESSION_ID: "session-a" }
+  });
+
+  assert.equal(own.status, 0, own.stderr);
+  assert.equal((own.stdout.match(/finished with status/g) ?? []).length, 1);
+  assert.notEqual(other.status, 0);
+  assert.match(other.stderr, /No job found for "task-session-b"/i);
+  assert.doesNotMatch(other.stderr, /belongs to a different Claude session/i);
+  assert.equal(other.stdout, "");
+  assert.equal(
+    listJobs(workspace).find((job) => job.id === "task-session-b-running")?.status,
+    "running",
+    "watching session A must not reconcile or mutate session B"
+  );
+});
+
+test("await-result times out on a still-active job without leaking stored output", () => {
+  const workspace = makeTempDir();
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [
+      {
+        id: "task-live",
+        status: "running",
+        title: "Codex Task",
+        sessionId: "session-a",
+        rendered: "secret full output",
+        createdAt: "2026-08-12T20:00:00.000Z",
+        updatedAt: "2026-08-12T20:00:01.000Z"
+      }
+    ]
+  });
+
+  const result = run("node", [SCRIPT, "await-result", "task-live", "--timeout-ms", "50"], {
+    cwd: workspace,
+    env: { ...process.env, CODEX_COMPANION_SESSION_ID: "session-a" }
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Timed out waiting for Codex job task-live/);
+  assert.match(result.stderr, /still running/);
+  assert.doesNotMatch(result.stdout, /secret full output/);
+  assert.doesNotMatch(result.stderr, /secret full output/);
+});
+
+test("await-result --json emits only jobId, status, and resultCommand", () => {
+  const workspace = makeTempDir();
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [
+      {
+        id: "task-json-shape",
+        status: "completed",
+        title: "Codex Task",
+        sessionId: "session-a",
+        rendered: "secret full output",
+        createdAt: "2026-08-12T20:00:00.000Z",
+        completedAt: "2026-08-12T20:01:00.000Z"
+      }
+    ]
+  });
+
+  const result = run("node", [SCRIPT, "await-result", "task-json-shape", "--json"], {
+    cwd: workspace,
+    env: { ...process.env, CODEX_COMPANION_SESSION_ID: "session-a" }
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    jobId: "task-json-shape",
+    status: "completed",
+    resultCommand: "/codex-router:result task-json-shape"
+  });
+  assert.doesNotMatch(result.stdout, /secret full output/);
+});
+
+test("await-result without a Claude session id allows any job", () => {
+  const workspace = makeTempDir();
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [
+      {
+        id: "task-agy",
+        status: "completed",
+        title: "Codex Task",
+        sessionId: "session-a",
+        createdAt: "2026-08-12T20:00:00.000Z",
+        completedAt: "2026-08-12T20:01:00.000Z"
+      }
+    ]
+  });
+
+  const env = { ...process.env };
+  delete env.CODEX_COMPANION_SESSION_ID;
+  const result = run("node", [SCRIPT, "await-result", "task-agy"], {
+    cwd: workspace,
+    env
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Codex job task-agy finished with status completed/);
+});
+
+test("analyze and exec --background completion is visible through await-result", async () => {
+  for (const { subcommand, prompt } of [
+    { subcommand: "analyze", prompt: "inspect cache behavior" },
+    { subcommand: "exec", prompt: "fix cache behavior" }
+  ]) {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    installFakeCodex(binDir, "slow-task");
+    initGitRepo(repo);
+
+    const launched = run("node", [SCRIPT, subcommand, "--background", prompt], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(launched.status, 0, `${subcommand}: ${launched.stderr}`);
+    const jobId = launched.stdout.match(new RegExp(`\\b(${subcommand}-[a-z0-9-]+)\\b`))?.[1];
+    assert.match(jobId ?? "", new RegExp(`^${subcommand}-`));
+
+    const notification = run("node", [SCRIPT, "await-result", jobId, "--timeout-ms", "15000"], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(notification.status, 0, `${subcommand} await-result: ${notification.stderr}`);
+    assert.equal(
+      notification.stdout,
+      `Codex job ${jobId} finished with status completed. Run /codex-router:result ${jobId} to view the full result.\n`
+    );
+    assert.doesNotMatch(notification.stdout, /Handled the requested task/);
+  }
+});
+
+test("await-result still finds an active job after many newer jobs are recorded", () => {
+  const workspace = makeTempDir();
+  const completed = Array.from({ length: 50 }, (_, index) => ({
+    id: `task-newer-${index}`,
+    status: "completed",
+    title: "Codex Task",
+    sessionId: "session-a",
+    createdAt: "2026-08-12T21:00:00.000Z",
+    updatedAt: new Date(Date.UTC(2026, 7, 12, 21, 0, index)).toISOString()
+  }));
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [
+      {
+        id: "task-old-running",
+        status: "running",
+        title: "Codex Task",
+        sessionId: "session-a",
+        rendered: "secret full output",
+        createdAt: "2026-08-12T20:00:00.000Z",
+        updatedAt: "2026-08-12T20:00:01.000Z"
+      },
+      ...completed
+    ]
+  });
+
+  const indexed = listJobs(workspace);
+  assert.equal(indexed.length, 51);
+  assert.ok(indexed.some((job) => job.id === "task-old-running"));
+
+  const result = run("node", [SCRIPT, "await-result", "task-old-running", "--timeout-ms", "40"], {
+    cwd: workspace,
+    env: { ...process.env, CODEX_COMPANION_SESSION_ID: "session-a" }
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Timed out waiting for Codex job task-old-running/);
+  assert.doesNotMatch(result.stderr, /No job found/);
+});
+
+test("concurrent await-result watchers stay correlated and emit once per exact job", async () => {
+  const workspace = makeTempDir();
+  const jobs = [
+    { id: "task-concurrent-a", finalStatus: "completed" },
+    { id: "task-concurrent-b", finalStatus: "failed" }
+  ];
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: jobs.map(({ id }) => ({
+      id,
+      status: "running",
+      title: "Codex Task",
+      sessionId: "session-a",
+      createdAt: "2026-08-12T20:00:00.000Z"
+    }))
+  });
+
+  const env = { ...process.env, CODEX_COMPANION_SESSION_ID: "session-a" };
+  const watchers = jobs.map(({ id }) =>
+    runAsync("node", [SCRIPT, "await-result", id, "--poll-interval-ms", "100", "--timeout-ms", "5000"], {
+      cwd: workspace,
+      env
+    })
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  for (const { id, finalStatus } of jobs) {
+    finalizeJob(workspace, id, {
+      status: finalStatus,
+      phase: finalStatus === "completed" ? "done" : "failed",
+      completedAt: "2026-08-12T20:01:00.000Z"
+    });
+  }
+
+  const results = await Promise.all(watchers);
+  for (let index = 0; index < jobs.length; index += 1) {
+    const { id, finalStatus } = jobs[index];
+    const result = results[index];
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      result.stdout,
+      `Codex job ${id} finished with status ${finalStatus}. Run /codex-router:result ${id} to view the full result.\n`
+    );
+    assert.equal((result.stdout.match(/finished with status/g) ?? []).length, 1);
+    assert.doesNotMatch(result.stdout, new RegExp(jobs[1 - index].id));
+  }
+});
+
+test("wait and background are mutually exclusive on every applicable companion command", () => {
+  const workspace = makeTempDir();
+  initGitRepo(workspace);
+
+  for (const subcommand of ["task", "analyze", "exec", "review", "adversarial-review"]) {
+    const result = run("node", [SCRIPT, subcommand, "--wait", "--background", "do work"], {
+      cwd: workspace
+    });
+    assert.notEqual(result.status, 0, `${subcommand} unexpectedly succeeded`);
+    assert.match(result.stderr, /Choose either --background or --wait, not both/i);
+  }
+
+  assert.equal(fs.existsSync(resolveStateDir(workspace)), false, "rejected execution flags must not create job state");
 });

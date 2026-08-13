@@ -192,14 +192,14 @@ test("session end tombstones the ending session's active jobs so surviving worke
   assert.equal(otherJob.status, "completed");
   assert.equal(otherJob.logFile, otherSessionLog);
 
-  // Tombstoned job artifacts are kept for inspection; only the pruner removes
-  // entries (and their files) from the index.
+  // Tombstoned job artifacts are kept for inspection until an explicit
+  // retention policy removes them.
   assert.equal(fs.existsSync(runningJobFile), true);
   assert.equal(fs.existsSync(runningLog), true);
 
   // Regression: a surviving worker's queued->running start write must back
-  // off on the terminal tombstone. allowInsert exists for pruner evictions;
-  // session teardown must not read as one, or a write-capable worker would
+  // off on the terminal tombstone. allowInsert recovers missing index entries;
+  // session teardown must not look like state loss, or a write-capable worker would
   // re-insert its job and run after the session ended.
   const runningRecord = {
     id: "review-running",

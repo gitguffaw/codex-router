@@ -1,11 +1,37 @@
+function isOptionLikeToken(token) {
+  return Boolean(token) && token !== "-" && String(token).startsWith("-");
+}
+
+export function hasLeadingHelpFlag(argv) {
+  for (const token of argv) {
+    if (token === "--") {
+      return false;
+    }
+    if (!isOptionLikeToken(token)) {
+      return false;
+    }
+    if (token === "--help" || token === "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const arrayOptions = new Set(config.arrayOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
   const aliasMap = config.aliasMap ?? {};
+  const stopAtPositional = Boolean(config.stopAtPositional);
   const options = {};
   const positionals = [];
   let passthrough = false;
+
+  function endOptions() {
+    if (stopAtPositional) {
+      passthrough = true;
+    }
+  }
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -22,6 +48,7 @@ export function parseArgs(argv, config = {}) {
 
     if (!token.startsWith("-") || token === "-") {
       positionals.push(token);
+      endOptions();
       continue;
     }
 
@@ -51,6 +78,7 @@ export function parseArgs(argv, config = {}) {
       }
 
       positionals.push(token);
+      endOptions();
       continue;
     }
 
@@ -77,6 +105,7 @@ export function parseArgs(argv, config = {}) {
     }
 
     positionals.push(token);
+    endOptions();
   }
 
   return { options, positionals };
