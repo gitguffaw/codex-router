@@ -219,7 +219,10 @@ export async function runTrackedJob(job, runner, options = {}) {
                 entry.pid === runningRecord.pid &&
                 entry.processStartTime === runningRecord.processStartTime
                   ? { heartbeatAt }
-                  : null
+                  : null,
+              // Reconstruct a complete running record if the job file is missing
+              // or corrupt. Do not allowInsert: a vanished index entry stays gone.
+              { storedFallback: runningRecord }
             );
           } catch {
             // Heartbeats are advisory activity telemetry. Lock contention or a

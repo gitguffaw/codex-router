@@ -118,16 +118,36 @@ test("task --watch returns the detached worker's final output", () => {
   assert.doesNotMatch(watched.stdout, /started in the background/);
 });
 
-test("task --watch leaves its detached worker running when the watcher is terminated", async () => {
+test("task --watch leaves its detached worker running when the watcher is terminated", async (t) => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "interruptible-slow-task");
   initGitRepo(repo);
 
+  // POSIX host timeouts typically terminate the watcher's whole process group.
+  // Isolate the watcher so that group kill cannot reach the separately detached
+  // worker. Windows has no equivalent group-kill API here, so fall back to the
+  // watcher PID.
+  const isolateWatcherGroup = process.platform !== "win32";
   const watcher = spawn("node", [SCRIPT, "task", "--watch", "--write", "finish after the watcher exits"], {
     cwd: repo,
     env: buildEnv(binDir),
-    windowsHide: true
+    windowsHide: true,
+    detached: isolateWatcherGroup
+  });
+  t.after(() => {
+    if (watcher.exitCode !== null || watcher.signalCode !== null) {
+      return;
+    }
+    try {
+      if (isolateWatcherGroup) {
+        process.kill(-watcher.pid, "SIGKILL");
+      } else {
+        watcher.kill("SIGKILL");
+      }
+    } catch {
+      // Watcher already exited.
+    }
   });
   let watcherStderr = "";
   watcher.stderr.setEncoding("utf8");
@@ -154,13 +174,23 @@ test("task --watch leaves its detached worker running when the watcher is termin
   );
   assert.notEqual(activeBeforeTimeout.pid, watcher.pid, "the watcher must not own the worker process");
 
-  watcher.kill("SIGTERM");
+  if (isolateWatcherGroup) {
+    process.kill(-watcher.pid, "SIGTERM");
+  } else {
+    watcher.kill("SIGTERM");
+  }
   const watcherExit = await watcherClosed;
-  assert.equal(watcherExit.signal, "SIGTERM");
+  if (isolateWatcherGroup) {
+    assert.equal(watcherExit.signal, "SIGTERM");
+  }
 
   const activeAfterTimeout = listJobs(repo).find((entry) => entry.id === jobId);
   assert.equal(activeAfterTimeout?.status, "running", "watcher expiration must not finalize the active job");
   assert.equal(activeAfterTimeout?.pid, activeBeforeTimeout.pid, "the detached worker identity must remain unchanged");
+  assert.doesNotThrow(
+    () => process.kill(activeBeforeTimeout.pid, 0),
+    "the detached worker must survive watcher process-group termination"
+  );
 
   const completed = await waitFor(
     () => {
@@ -812,6 +842,164 @@ test("active tracked jobs refresh a heartbeat without imposing a runtime deadlin
   assert.equal(completed.status, "completed");
   assert.equal(completed.pid, null);
   assert.ok(completed.heartbeatAt);
+});
+
+function assertReconstructedRunningRecord(stored, owner) {
+  assert.equal(stored.id, owner.id);
+  assert.equal(stored.status, "running");
+  assert.equal(stored.title, owner.title);
+  assert.equal(stored.jobClass, owner.jobClass);
+  assert.equal(stored.summary, owner.summary);
+  assert.equal(stored.workspaceRoot, owner.workspaceRoot);
+  assert.equal(stored.pid, owner.pid);
+  assert.equal(stored.processStartTime, owner.processStartTime);
+  assert.equal(stored.startedAt, owner.startedAt);
+  assert.ok(stored.heartbeatAt);
+  assert.notEqual(Object.keys(stored).sort().join(","), "heartbeatAt");
+}
+
+test("heartbeat reconstructs a missing or corrupt job file with the complete running record", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-heartbeat-rebuild";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  const job = {
+    id: jobId,
+    workspaceRoot: workspace,
+    title: "Codex Task",
+    jobClass: "task",
+    summary: "Investigate flaky test"
+  };
+
+  await runTrackedJob(
+    job,
+    async () => {
+      const jobFile = resolveJobFile(workspace, jobId);
+      const owner = listJobs(workspace).find((entry) => entry.id === jobId);
+      assert.equal(owner?.status, "running");
+
+      for (const mutate of [
+        () => {
+          fs.unlinkSync(jobFile);
+        },
+        () => {
+          fs.writeFileSync(jobFile, "{not-json", "utf8");
+        }
+      ]) {
+        mutate();
+        const stored = await waitFor(
+          () => {
+            if (!fs.existsSync(jobFile)) {
+              return null;
+            }
+            try {
+              const parsed = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+              return parsed.id === jobId && parsed.pid === owner.pid && parsed.heartbeatAt ? parsed : null;
+            } catch {
+              return null;
+            }
+          },
+          { timeoutMs: 1000, intervalMs: 10 }
+        );
+        assertReconstructedRunningRecord(stored, owner);
+      }
+
+      return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "done", warnings: [] };
+    },
+    { heartbeatIntervalMs: 20 }
+  );
+});
+
+test("heartbeat does not resurrect or overwrite a cancelled job", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-heartbeat-cancelled";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  await runTrackedJob(
+    { id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" },
+    async () => {
+      await waitFor(
+        () => {
+          const heartbeatAt = listJobs(workspace).find((entry) => entry.id === jobId)?.heartbeatAt;
+          const startedAt = listJobs(workspace).find((entry) => entry.id === jobId)?.startedAt;
+          return heartbeatAt && startedAt && heartbeatAt !== startedAt ? heartbeatAt : null;
+        },
+        { timeoutMs: 1000, intervalMs: 10 }
+      );
+
+      finalizeJob(workspace, jobId, {
+        status: "cancelled",
+        phase: "cancelled",
+        pid: null,
+        errorMessage: "Cancelled by user."
+      });
+
+      const stateFile = path.join(resolveStateDir(workspace), "state.json");
+      const jobFile = resolveJobFile(workspace, jobId);
+      const frozenState = fs.readFileSync(stateFile, "utf8");
+      const frozenJob = fs.readFileSync(jobFile, "utf8");
+
+      await new Promise((resolve) => setTimeout(resolve, 160));
+
+      assert.equal(fs.readFileSync(stateFile, "utf8"), frozenState);
+      assert.equal(fs.readFileSync(jobFile, "utf8"), frozenJob);
+      assert.equal(listJobs(workspace).find((entry) => entry.id === jobId)?.status, "cancelled");
+
+      return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "done", warnings: [] };
+    },
+    { heartbeatIntervalMs: 20 }
+  );
+});
+
+test("heartbeat does not reinsert a missing index entry", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-heartbeat-missing-index";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+
+  await runTrackedJob(
+    { id: jobId, workspaceRoot: workspace, title: "Codex Task", jobClass: "task" },
+    async () => {
+      await waitFor(
+        () => {
+          const heartbeatAt = listJobs(workspace).find((entry) => entry.id === jobId)?.heartbeatAt;
+          const startedAt = listJobs(workspace).find((entry) => entry.id === jobId)?.startedAt;
+          return heartbeatAt && startedAt && heartbeatAt !== startedAt ? heartbeatAt : null;
+        },
+        { timeoutMs: 1000, intervalMs: 10 }
+      );
+
+      saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+      const stateFile = path.join(resolveStateDir(workspace), "state.json");
+      const jobFile = resolveJobFile(workspace, jobId);
+      const frozenState = fs.readFileSync(stateFile, "utf8");
+      const frozenJob = fs.readFileSync(jobFile, "utf8");
+
+      await new Promise((resolve) => setTimeout(resolve, 160));
+
+      assert.equal(fs.readFileSync(stateFile, "utf8"), frozenState);
+      assert.equal(fs.readFileSync(jobFile, "utf8"), frozenJob);
+      assert.equal(
+        listJobs(workspace).find((entry) => entry.id === jobId),
+        undefined,
+        "a heartbeat must not reinsert a vanished index entry"
+      );
+
+      return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "done", warnings: [] };
+    },
+    { heartbeatIntervalMs: 20 }
+  );
 });
 
 test("owner refuses to resurrect a job cancelled before it starts", async () => {
