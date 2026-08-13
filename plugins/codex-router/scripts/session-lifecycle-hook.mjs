@@ -76,8 +76,8 @@ function cleanupSessionJobs(cwd, sessionId) {
 
 function tombstoneSessionJob(workspaceRoot, job) {
   // Tombstone FIRST, under the state lock. The index entry must stay: a
-  // worker's queued->running start write treats a MISSING entry as a pruner
-  // eviction and re-inserts it (allowInsert), so removing the entry here
+  // worker's queued->running start write treats a MISSING entry as recoverable
+  // state loss and re-inserts it (allowInsert), so removing the entry here
   // would let a not-yet-verifiable worker resurrect the job and run
   // write-capable work after its session ended. A terminal entry instead
   // makes that start write back off. First terminal state wins: an entry

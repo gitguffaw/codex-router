@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseArgs, splitRawArgumentString } from "../plugins/codex-router/scripts/lib/args.mjs";
+import { hasLeadingHelpFlag, parseArgs, splitRawArgumentString } from "../plugins/codex-router/scripts/lib/args.mjs";
 
 test("splitRawArgumentString preserves quoted prompt segments", () => {
   assert.deepEqual(splitRawArgumentString('--model "gpt-5.4 mini" "inspect cache behavior"'), [
@@ -56,4 +56,37 @@ test("parseArgs preserves unknown flags as positional prompt text", () => {
 test("parseArgs rejects missing values for configured value options", () => {
   assert.throws(() => parseArgs(["--model"], { valueOptions: ["model"] }), /Missing value for --model/);
   assert.throws(() => parseArgs(["-m"], { valueOptions: ["model"], aliasMap: { m: "model" } }), /Missing value for -m/);
+});
+
+test("parseArgs stopAtPositional keeps later dashed tokens in the prompt", () => {
+  const parsed = parseArgs(["--wait", "--model", "gpt-5.4", "document", "--wait", "--background"], {
+    valueOptions: ["model"],
+    booleanOptions: ["wait", "background"],
+    stopAtPositional: true
+  });
+
+  assert.deepEqual(parsed.options, {
+    wait: true,
+    model: "gpt-5.4"
+  });
+  assert.deepEqual(parsed.positionals, ["document", "--wait", "--background"]);
+});
+
+test("parseArgs stopAtPositional honors -- as the end of options", () => {
+  const parsed = parseArgs(["--wait", "--", "--background", "--help"], {
+    booleanOptions: ["wait", "background"],
+    stopAtPositional: true
+  });
+
+  assert.deepEqual(parsed.options, { wait: true });
+  assert.deepEqual(parsed.positionals, ["--background", "--help"]);
+});
+
+test("hasLeadingHelpFlag ignores --help and -h after the prompt or --", () => {
+  assert.equal(hasLeadingHelpFlag(["--json", "--help"]), true);
+  assert.equal(hasLeadingHelpFlag(["-h"]), true);
+  assert.equal(hasLeadingHelpFlag(["explain", "why", "--help", "is", "printed"]), false);
+  assert.equal(hasLeadingHelpFlag(["add", "a", "-h", "flag"]), false);
+  assert.equal(hasLeadingHelpFlag(["--", "--help"]), false);
+  assert.equal(hasLeadingHelpFlag(["--wait", "document", "--help"]), false);
 });

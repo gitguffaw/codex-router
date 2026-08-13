@@ -32,6 +32,12 @@ test("Antigravity bundle exposes codex-router skill metadata", () => {
   assert.match(skill, /status/);
   assert.match(skill, /result/);
   assert.match(skill, /cancel/);
+  assert.match(skill, /analyze --background/);
+  assert.match(skill, /exec --background/);
+  assert.match(skill, /task --background/);
+  assert.match(skill, /await-result/);
+  assert.match(skill, /codex-companion\.mjs" result "<exact-job-id>"/);
+  assert.doesNotMatch(skill, /leaves full output behind `\/result`/);
   assert.match(skill, /stale model pin/i);
   assert.match(skill, /translate Claude Code-specific follow-up commands into AGY-safe equivalents/i);
   assert.match(skill, /translate `!codex login` to `codex login`/i);

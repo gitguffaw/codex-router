@@ -240,7 +240,7 @@ test("analyze runs read-only with context-pack metadata", () => {
   installFakeCodex(binDir);
   initGitRepo(repo);
 
-  const result = run("node", [SCRIPT, "analyze", "--json", "inspect cache behavior"], {
+  const result = run("node", [SCRIPT, "analyze", "--wait", "--json", "inspect cache behavior"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
@@ -265,7 +265,7 @@ test("exec is write-capable and --best --xhigh --fast starts app-server with con
   installFakeCodex(binDir);
   initGitRepo(repo);
 
-  const result = run("node", [SCRIPT, "exec", "--json", "--best", "--effort", "xhigh", "--fast", "fix cache behavior"], {
+  const result = run("node", [SCRIPT, "exec", "--wait", "--json", "--best", "--effort", "xhigh", "--fast", "fix cache behavior"], {
     cwd: repo,
     env: buildEnv(binDir)
   });

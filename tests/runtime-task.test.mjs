@@ -14,6 +14,143 @@ const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
 const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "codex-companion.mjs");
 const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mjs");
 
+const HELP_AWARE_COMMANDS = [
+  "setup",
+  "models",
+  "analyze",
+  "exec",
+  "review",
+  "adversarial-review",
+  "task",
+  "status",
+  "await-result",
+  "result",
+  "cancel"
+];
+
+test("help-aware companion commands print command-specific usage without creating a job", () => {
+  for (const subcommand of HELP_AWARE_COMMANDS) {
+    for (const flag of ["--help", "-h"]) {
+      const workspace = makeTempDir();
+      const result = run("node", [SCRIPT, subcommand, flag], { cwd: workspace });
+
+      assert.equal(result.status, 0, `${subcommand} ${flag}: ${result.stderr}`);
+      assert.match(result.stdout, /^Usage:/);
+      assert.match(result.stdout, new RegExp(`codex-companion\\.mjs ${subcommand} `));
+      assert.doesNotMatch(result.stdout, /codex-companion\.mjs cli /);
+      if (subcommand !== "await-result") {
+        assert.doesNotMatch(result.stdout, /await-result/);
+      }
+      assert.equal(result.stderr, "");
+      assert.equal(fs.existsSync(resolveStateDir(workspace)), false, `${subcommand} ${flag} created job state`);
+    }
+  }
+});
+
+test("global help omits internal-only companion commands", () => {
+  const workspace = makeTempDir();
+  const result = run("node", [SCRIPT, "--help"], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /codex-companion\.mjs analyze /);
+  assert.match(result.stdout, /codex-companion\.mjs cli /);
+  assert.doesNotMatch(result.stdout, /await-result/);
+  assert.doesNotMatch(result.stdout, /task-worker/);
+  assert.doesNotMatch(result.stdout, /task-resume-candidate/);
+});
+
+test("analyze and exec keep --help and -h inside prompt text", () => {
+  const cases = [
+    { subcommand: "analyze", prompt: "explain why --help is printed twice" },
+    { subcommand: "exec", prompt: "add a -h flag to the CLI" }
+  ];
+
+  for (const { subcommand, prompt } of cases) {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    const statePath = path.join(binDir, "fake-codex-state.json");
+    installFakeCodex(binDir);
+    initGitRepo(repo);
+
+    const quoted = run("node", [SCRIPT, subcommand, prompt], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(quoted.status, 0, `${subcommand} quoted: ${quoted.stderr}`);
+    assert.doesNotMatch(quoted.stdout, /^Usage:/);
+    assert.match(JSON.parse(fs.readFileSync(statePath, "utf8")).lastTurnStart.prompt, new RegExp(prompt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    const split = run("node", [SCRIPT, subcommand, ...prompt.split(" ")], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(split.status, 0, `${subcommand} split: ${split.stderr}`);
+    assert.doesNotMatch(split.stdout, /^Usage:/);
+  }
+});
+
+test("analyze treats a trailing --help after -- as prompt text", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "analyze", "--", "--help"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /^Usage:/);
+  assert.match(JSON.parse(fs.readFileSync(statePath, "utf8")).lastTurnStart.prompt, /--help/);
+});
+
+test("analyze and exec keep --wait and --background inside prompt text", () => {
+  const cases = [
+    { subcommand: "analyze", prompt: "document --wait vs --background" },
+    { subcommand: "exec", prompt: "make --wait and --background mutually exclusive" }
+  ];
+
+  for (const { subcommand, prompt } of cases) {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    const statePath = path.join(binDir, "fake-codex-state.json");
+    installFakeCodex(binDir);
+    initGitRepo(repo);
+
+    const result = run("node", [SCRIPT, subcommand, prompt], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+
+    assert.equal(result.status, 0, `${subcommand}: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /Choose either --background or --wait/);
+    assert.match(
+      JSON.parse(fs.readFileSync(statePath, "utf8")).lastTurnStart.prompt,
+      new RegExp(prompt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    );
+  }
+});
+
+test("task --wait stays foreground and returns Codex's final output", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "task", "--wait", "investigate the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "Handled the requested task.\nTask prompt accepted.\n");
+  assert.doesNotMatch(result.stdout, /started in the background/i);
+  const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+  assert.equal(state.jobs[0].status, "completed");
+});
+
 test("task runs without auth preflight so Codex can refresh an expired session", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
@@ -61,7 +198,7 @@ test("review accepts the quoted raw argument style for built-in base-branch revi
   run("git", ["commit", "-m", "init"], { cwd: repo });
   fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = 2;\n");
 
-  const result = run("node", [SCRIPT, "review", "--base main"], {
+  const result = run("node", [SCRIPT, "review", "--wait --base main"], {
     cwd: repo,
     env: buildEnv(binDir)
   });

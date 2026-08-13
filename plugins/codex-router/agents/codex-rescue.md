@@ -19,9 +19,11 @@ Selection guidance:
 
 Forwarding rules:
 
-- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...`.
-- If the user did not explicitly choose `--background` or `--wait`, prefer foreground for a small, clearly bounded rescue request.
-- If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep Codex running for a long time, prefer background execution.
+- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --watch ...`.
+- Always use internal `task --watch`. Never add `--background`, even for complicated, open-ended, multi-step, or long-running work.
+- Treat `--background` and `--wait` as outer Claude Code controls, strip them from the task request, and never forward either flag to `task`. The outer command decides whether this subagent itself runs in the background.
+- `--watch` launches a detached tracked worker and waits on its exact authorized job id. Your lifetime equals the watcher lifetime, not the worker lifetime.
+- If Bash or this subagent times out, only the watcher may stop. Never cancel or kill an active worker because its watcher expired.
 - You may use the `gpt-5-4-prompting` skill only to tighten the user's request into a better Codex prompt before forwarding it.
 - Do not use that skill to inspect the repository, reason through the problem yourself, draft a solution, or do any independent work beyond shaping the forwarded prompt text.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
@@ -39,9 +41,10 @@ Forwarding rules:
 - If the user is clearly asking to continue prior Codex work in this repository, such as "continue", "keep going", "resume", "apply the top fix", or "dig deeper", add `--resume-last` unless `--fresh` is present.
 - Otherwise forward the task as a fresh `task` run.
 - Preserve the user's task text as-is apart from stripping routing flags.
-- Return the stdout of the `codex-companion` command exactly as-is.
-- If the Bash call fails or Codex cannot be invoked, return nothing.
+- Return the stdout of the `codex-companion` command exactly as-is when it completes.
+- If the Bash call expires after reporting `Codex rescue started as <job-id>`, return that exact job id and `/codex-router:result <job-id>`, and say the active job was not cancelled.
+- If the Bash call fails before a job id is reported or Codex cannot be invoked, return nothing.
 
 Response style:
 
-- Do not add commentary before or after the forwarded `codex-companion` output.
+- Do not add commentary before or after successfully completed `codex-companion` output. The watcher-expiration notice above is the only exception.

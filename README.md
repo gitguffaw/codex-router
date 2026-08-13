@@ -18,6 +18,29 @@ Host adapters (Claude Code slash commands and the AGY skill) call the companion 
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
 
+## Minimal Codex CLI Skill
+
+If you want a capable Claude Code harness to drive the installed `codex` binary directly, install the separate `codex-cli` plugin from this marketplace:
+
+```bash
+/plugin marketplace add gitguffaw/codex-router
+/plugin install codex-cli@codex-router
+/reload-plugins
+```
+
+`codex-cli` contains one skill and no companion runtime, hooks, broker, background-job store, or MCP server. It teaches Claude Code to inspect the live Codex CLI, resolve models and reasoning levels, choose native `codex exec`/`codex review`/interactive surfaces, preserve read/write boundaries, continue sessions, and keep Codex-native tools inside Codex.
+
+Do not install `codex-cli` beside `codex-router` if you want natural-language Codex requests to keep using Router job tracking, context packs, and status/result/cancel. Prefer `/codex-router:*`, or disable `codex-cli`, while the Router plugin is active. If both plugins are installed, the `codex-cli` skill defers to `codex-router` whenever that plugin is available or the user asks for Router-managed work.
+
+Example of an explicit raw-CLI request:
+
+```text
+Use the raw Codex CLI with sol at xhigh effort to review the PR before submitting it.
+Do not submit until Codex reports no blocking findings.
+```
+
+The skill deliberately does not provide Router-managed detached jobs, cross-session status/result/cancel records, orphan recovery, stop hooks, or cryptographic review receipts. Use the full `codex-router` plugin when those guarantees are required.
+
 ## What You Get
 
 - `/codex-router:analyze` for policy-backed read-only Codex analysis
@@ -250,6 +273,8 @@ Use it when you want:
 
 Runs a read-only Codex analysis job with the vendored Codex policy context recorded in a job context pack.
 
+Use `--wait` to force foreground execution or `--background` to detach the Codex worker. These flags are mutually exclusive. A background analysis installs a session-scoped completion notifier; the notification contains the terminal status and `/codex-router:result <job-id>`, not the full result.
+
 Examples:
 
 ```bash
@@ -265,6 +290,8 @@ Examples:
 ### `/codex-router:exec`
 
 Runs a direct write-capable Codex execution job. Use this when you explicitly want Codex to make a bounded implementation change through the policy-routed `exec` mode. Read-only commands such as `/codex-router:analyze` and `/codex-router:review` do not edit files. `/codex-router:rescue` is a separate task path that defaults to `task --write` for fix work (and stays read-only when you ask for diagnosis-only). `/codex-router:cli` is a raw escape hatch and is not job-tracked write routing.
+
+Use `--wait` to force foreground execution or `--background` to detach the Codex worker. These flags are mutually exclusive. A background execution installs a session-scoped completion notifier; the notification contains the terminal status and `/codex-router:result <job-id>`, while the full output stays out of context until you request it.
 
 Examples:
 
@@ -360,9 +387,9 @@ Use it when you want Codex to:
 - take a faster or cheaper pass with a smaller model
 
 > [!NOTE]
-> Depending on the task and the model you choose these tasks might take a long time and it's generally recommended to force the task to be in the background or move the agent to the background.
+> Depending on the task and model, rescue work may take a long time. Use `--background` when you want to keep working in Claude Code while its watcher waits for the detached Codex worker.
 
-It supports `--background`, `--wait`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
+It supports `--background`, `--wait`, `--resume`, and `--fresh`. `--background` and `--wait` are mutually exclusive. Rescue defaults to a foreground watcher, but its tracked Codex worker is detached from Bash. The watcher follows only the exact authorized job id and returns Codex's final output when the job finishes. If Bash or the subagent watcher expires first, the active worker continues; use `/codex-router:status <job-id>` and `/codex-router:result <job-id>` later. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
 
 Examples:
 
@@ -396,6 +423,7 @@ Examples:
 ```bash
 /codex-router:status
 /codex-router:status task-abc123
+/codex-router:status task-abc123 --wait
 ```
 
 Use it to:
@@ -403,6 +431,8 @@ Use it to:
 - check progress on background work
 - see the latest completed job
 - confirm whether a task is still running
+
+`status <job-id> --wait` waits up to 30 minutes by default; pass `--timeout-ms <ms>` to choose a different bound. Claude Code background analyze/exec commands install a separate session-scoped watcher, so jobs that run beyond the 15-minute Stop-hook window can still notify the originating session without blocking unrelated turns.
 
 ### `/codex-router:result`
 
@@ -490,6 +520,8 @@ Then check in with:
 /codex-router:status
 /codex-router:result
 ```
+
+Background analyze/exec work sends a concise completion notification automatically. Background rescue uses a host watcher around a detached tracked worker, and background review uses the host background task's completion event. In every case, use `/codex-router:result <job-id>` when you want the stored full output; an expired rescue watcher does not cancel its active worker.
 
 ## Codex Integration
 

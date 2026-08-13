@@ -4,6 +4,8 @@ import process from "node:process";
 import { getProcessStartTime } from "./process.mjs";
 import { finalizeJob, resolveJobLogFile } from "./state.mjs";
 
+const DEFAULT_JOB_HEARTBEAT_INTERVAL_MS = 15_000;
+
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 export const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
 export const TERMINAL_JOB_STATUSES = new Set([
@@ -152,7 +154,7 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
 
     // Commit the progress patch to both records under one lock. Skip a job that
     // is gone or already terminal so a late progress event can never resurrect
-    // a pruned job or split a record a cancel just finalized.
+    // a missing job or split a record a cancel just finalized.
     finalizeJob(workspaceRoot, jobId, ({ entry }) =>
       entry && isActiveJobStatus(entry.status) ? patch : null
     );
@@ -177,10 +179,12 @@ export function createProgressReporter({ stderr = false, logFile = null, onEvent
 }
 
 export async function runTrackedJob(job, runner, options = {}) {
+  const startedAt = nowIso();
   const runningRecord = {
     ...job,
     status: "running",
-    startedAt: nowIso(),
+    startedAt,
+    heartbeatAt: startedAt,
     phase: "starting",
     pid: process.pid,
     processStartTime: getProcessStartTime(process.pid),
@@ -189,7 +193,7 @@ export async function runTrackedJob(job, runner, options = {}) {
 
   // Claim the job under the lock. If it was cancelled (or otherwise finalized)
   // before this runtime got going, back off without running — never resurrect a
-  // terminal job to "running". allowInsert re-adds an entry the pruner evicted.
+  // terminal job to "running". allowInsert recovers a missing index entry.
   const startOutcome = finalizeJob(
     job.workspaceRoot,
     job.id,
@@ -199,6 +203,31 @@ export async function runTrackedJob(job, runner, options = {}) {
   if (!startOutcome.applied) {
     return null;
   }
+
+  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_JOB_HEARTBEAT_INTERVAL_MS;
+  const heartbeatTimer =
+    heartbeatIntervalMs > 0
+      ? setInterval(() => {
+          const heartbeatAt = nowIso();
+          try {
+            finalizeJob(
+              job.workspaceRoot,
+              job.id,
+              ({ entry }) =>
+                entry &&
+                isActiveJobStatus(entry.status) &&
+                entry.pid === runningRecord.pid &&
+                entry.processStartTime === runningRecord.processStartTime
+                  ? { heartbeatAt }
+                  : null
+            );
+          } catch {
+            // Heartbeats are advisory activity telemetry. Lock contention or a
+            // transient state write must never terminate the actual worker.
+          }
+        }, heartbeatIntervalMs)
+      : null;
+  heartbeatTimer?.unref?.();
 
   try {
     const execution = await runner();
@@ -214,8 +243,8 @@ export async function runTrackedJob(job, runner, options = {}) {
       job.workspaceRoot,
       job.id,
       ({ entry }) => {
-        // A missing entry means the pruner evicted this job mid-run; re-insert
-        // our result (allowInsert). A present terminal entry means a cancel
+        // A missing entry means state lost this job mid-run; re-insert our
+        // result (allowInsert). A present terminal entry means a cancel
         // won — back off. Only an active entry is overwritten with completion.
         if (entry && !isActiveJobStatus(entry.status)) {
           return null;
@@ -228,6 +257,7 @@ export async function runTrackedJob(job, runner, options = {}) {
             turnId: execution.turnId ?? null,
             pid: null,
             phase: completionPhase,
+            heartbeatAt: completedAt,
             completedAt,
             result: execution.payload,
             rendered: execution.rendered,
@@ -240,6 +270,7 @@ export async function runTrackedJob(job, runner, options = {}) {
             summary: execution.summary,
             phase: completionPhase,
             pid: null,
+            heartbeatAt: completedAt,
             completedAt,
             model: execution.model ?? job.model ?? null,
             effort: execution.effort ?? job.effort ?? null,
@@ -268,6 +299,7 @@ export async function runTrackedJob(job, runner, options = {}) {
           phase: "failed",
           errorMessage,
           pid: null,
+          heartbeatAt: completedAt,
           completedAt
         };
         return {
@@ -282,5 +314,9 @@ export async function runTrackedJob(job, runner, options = {}) {
       { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
     );
     throw error;
+  } finally {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
   }
 }
