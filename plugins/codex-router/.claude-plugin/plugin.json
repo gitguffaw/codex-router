@@ -1,7 +1,7 @@
 {
   "name": "codex-router",
   "displayName": "Codex Router",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Route Claude Code work through Codex with live model discovery, reliable jobs, and explicit policy controls.",
   "author": {
     "name": "Compound"

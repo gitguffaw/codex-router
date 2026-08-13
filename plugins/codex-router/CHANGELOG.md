@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.4.1
 
 - Decouple rescue watcher expiration from worker lifetime. Rescue now launches a detached tracked worker through internal `task --watch`, watches only its exact session-authorized job id, and leaves active work running if Bash or its subagent watcher expires. Tracked workers also record periodic heartbeats without imposing a runtime cap.
+- Rebuild a complete running job record from the active worker's persisted ownership data when its per-job file is missing or corrupt. Heartbeats still refuse to reinsert missing index entries or overwrite terminal jobs, so recovery cannot resurrect cancelled or untracked work.
 - Add the internal `await-result` companion surface for host-tracked background notifiers. It emits exactly one session-scoped terminal-status nudge for completed, completed-with-warnings, blocked, failed, interrupted, or cancelled jobs, leaves full output behind the result command, and treats other-session job ids as not found.
 - Make `--wait` and `--background` mutually exclusive across task, analyze, exec, and both review commands; parse those execution flags only in the leading option prefix (honor `--`); advertise `status --wait`, raise its default timeout from four to thirty minutes, and keep watcher waits independent of the Stop-hook timeout.
 - Intercept leading `task|analyze|exec|review --help` (and the other first-class companion commands) before subcommand argument parsing so help cannot become prompt text, enqueue a job, or invoke Codex. `--help`/`-h` inside prompt text stay in the prompt.
