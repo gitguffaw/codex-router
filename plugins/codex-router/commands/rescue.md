@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [what Codex should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--model <selector>] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [what Codex should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -49,7 +49,7 @@ Operating rules:
 - If the Bash watcher expires after printing `Codex rescue started as <job-id>`, report that exact id and `/codex-router:result <job-id>`; state that the active job was not cancelled. Do not start another job.
 - Do not ask the subagent to inspect files, monitor progress, poll `/codex-router:status`, fetch `/codex-router:result`, call `/codex-router:cancel`, summarize output, or do follow-up work of its own.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.
-- Leave the model unset unless the user explicitly asks for one. If they ask for `spark`, map it to `gpt-5.3-codex-spark`.
+- Leave the model unset unless the user explicitly asks for one. Preserve exact selectors and aliases such as `spark`; the runtime resolves them against the live catalog.
 - Preserve `-c`/`--config`, `--enable`, and `--disable` when the user explicitly supplies them.
 - Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
 - If the helper reports that Codex is missing or unauthenticated, stop and tell the user to run `/codex-router:setup`.

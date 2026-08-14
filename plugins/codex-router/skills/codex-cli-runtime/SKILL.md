@@ -20,7 +20,7 @@ Execution rules:
 - That prompt drafting is the only Claude-side work allowed. Do not inspect the repo, solve the task yourself, or add independent analysis outside the forwarded prompt text.
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
-- Map `spark` to `--model gpt-5.3-codex-spark`.
+- Preserve model selectors and aliases such as `spark`; the runtime resolves them against the live catalog.
 - Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 
 Command selection:
@@ -28,14 +28,14 @@ Command selection:
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
 - Always call internal `task --watch` without `--background`. The outer command backgrounds the rescue subagent when requested. `--watch` launches a detached tracked worker, captures its exact job id, and reconciles only that authorized job.
 - The watcher may expire, but the active worker must continue. Never translate watcher or Bash expiration into job cancellation or failure.
-- If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
+- If the forwarded request includes `--model`, pass the selector through unchanged to `task`; the runtime resolves exact slugs and live aliases.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `-c`/`--config`, `--enable`, or `--disable`, pass those controls through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- `--effort`: pass through the requested level. Do not maintain a fixed list; Codex effort names evolve. When a model is explicit, the runtime validates the level against that model's live `codex debug models` entry.
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Safety rules:

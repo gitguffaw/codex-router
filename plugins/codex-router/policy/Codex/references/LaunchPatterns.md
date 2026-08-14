@@ -22,10 +22,10 @@ Do not preserve a static default model in reusable launch patterns. Resolve mode
 codex debug models
 ```
 
-Use the local config/runtime default when the user does not care which model runs. When the user asks for "best", "highest think", or "highest speed", choose the strongest currently available listed model that supports the highest requested reasoning effort and, for speed, prefer `service_tier="fast"` on that model.
+Use the local config/runtime default when the user does not care which model runs. When the user asks for "best", "highest think", or "highest speed", choose the highest-priority visible model compatible with the user's requested service tier. When highest reasoning is requested, use that selected model's deepest advertised effort. Do not invent a speed-tier ranking; the live catalog does not define one.
 
 ```bash
-codex -m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT>"' -c 'service_tier="fast"' "<prompt>"
+codex -m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' -c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"' "<prompt>"
 ```
 
 Use mini/spark models only when the user explicitly prioritizes fastest response, lower cost, or lightweight work over maximum capability.
@@ -35,8 +35,8 @@ Use mini/spark models only when the user explicitly prioritizes fastest response
 ```bash
 codex "<prompt>"
 codex -m <MODEL_ID> "<prompt>"
-codex -m <MODEL_ID> -c 'model_reasoning_effort="xhigh"' "<prompt>"
-codex -m <MODEL_ID> -c 'model_reasoning_effort="xhigh"' -c 'service_tier="fast"' "<prompt>"
+codex -m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' "<prompt>"
+codex -m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' -c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"' "<prompt>"
 ```
 
 Use when steering matters or when model/effort choice is part of the task.
@@ -46,7 +46,7 @@ Use when steering matters or when model/effort choice is part of the task.
 ```bash
 codex --search "<prompt>"
 codex --search -m <MODEL_ID> "<prompt>"
-codex --search -m <MODEL_ID> -c 'model_reasoning_effort="xhigh"' -c 'service_tier="fast"' "<prompt>"
+codex --search -m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' -c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"' "<prompt>"
 ```
 
 Use when Codex itself must search the web.
@@ -74,7 +74,7 @@ Name the inner capability explicitly. Use plain-language requests when Codex sho
 
 ```bash
 codex exec --full-auto "<prompt>"
-codex exec -m <MODEL_ID> -c 'model_reasoning_effort="xhigh"' -c 'service_tier="fast"' --full-auto "<prompt>"
+codex exec -m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' -c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"' --full-auto "<prompt>"
 ```
 
 Use when the task is concrete and should complete non-interactively.
@@ -84,7 +84,7 @@ Use when the task is concrete and should complete non-interactively.
 ```bash
 codex review --uncommitted
 codex -m <MODEL_ID> review --uncommitted "Focus on regressions, edge cases, and maintainability"
-codex review -c 'model="<MODEL_ID>"' -c 'model_reasoning_effort="xhigh"' -c 'service_tier="fast"' --uncommitted "Focus on regressions, edge cases, and maintainability"
+codex review -c 'model="<MODEL_ID>"' -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' -c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"' --uncommitted "Focus on regressions, edge cases, and maintainability"
 ```
 
 Use when critique is wanted without edits.
@@ -93,7 +93,7 @@ Use when critique is wanted without edits.
 
 ```bash
 codex "Use multiple agents. Task: <goal> ..."
-codex --search -m <MODEL_ID> -c 'model_reasoning_effort="xhigh"' -c 'service_tier="fast"' "Use multiple agents for a round-robin discussion. Task: <goal> ..."
+codex --search -m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' -c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"' "Use multiple agents for a round-robin discussion. Task: <goal> ..."
 ```
 
 Use when Codex should split work into concurrent lanes or debate roles. Codex only spawns subagents when explicitly asked.

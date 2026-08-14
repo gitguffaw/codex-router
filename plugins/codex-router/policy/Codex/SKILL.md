@@ -62,9 +62,9 @@ Do not encode a permanent default model in this skill. Codex model IDs, aliases,
 - If the user names a model, use that model only after confirming it is currently available. If unavailable, say so and choose a nearby available model only when the user's intent is clear.
 - If the user does not name a model, inherit the local Codex config/runtime default. This lets `~/.codex/config.toml`, profiles, and future Codex migrations do their job.
 - If the user asks for the best, strongest, highest-thinking, or highest-speed Codex, resolve the model at launch time from `codex debug models` and `~/.codex/config.toml`; fall back to `~/.codex/models_cache.json` only when the CLI lacks the debug command.
-- For "best with highest think and highest speed", prefer the strongest available listed model that supports the highest requested reasoning level and the `fast` service tier. Today on this machine that resolves to `gpt-5.5` with `xhigh` and `service_tier="fast"`, but treat that as an observation, not a durable rule.
-- Prefer `service_tier="fast"` on the strongest model over downgrading to a mini/spark model. Use mini/spark only when the user explicitly prioritizes fastest response, lower cost, or lightweight work over maximum capability.
-- When overriding explicitly, use separate config overrides such as `-m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT>"' -c 'service_tier="fast"'`.
+- Choose the highest-priority visible model compatible with the user's requested service tier. When the user asks for the highest reasoning, use that selected model's deepest advertised effort. Do not invent a speed-tier ranking; the live catalog does not define one. Do not pin that choice in reusable guidance.
+- Prefer the requested service tier on the highest-priority compatible model instead of assuming a mini/spark model is faster. Use mini/spark only when the user explicitly prioritizes a smaller or lightweight model.
+- When overriding explicitly, use separate config overrides such as `-m <MODEL_ID> -c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"' -c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"'`.
 
 ## Primary Modes
 
@@ -78,8 +78,8 @@ Do not encode a permanent default model in this skill. Codex model IDs, aliases,
 Apply zero or more modifiers to the primary mode.
 
 - `Model`: use `-m <MODEL_ID>` where supported after resolving the current model from user intent, config, or `codex debug models`. For `review`, use `codex -m <MODEL_ID> review ...` or `codex review -c 'model="<MODEL_ID>"' ...`.
-- `Reasoning`: use `-c 'model_reasoning_effort="<minimal|low|medium|high|xhigh>"'` for supported models. Choose the highest supported effort when the user asks for max think. `xhigh` is model-dependent.
-- `SpeedTier`: use `-c 'service_tier="fast"'` when the user asks for highest speed and the current account/model supports it.
+- `Reasoning`: use `-c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"'`. Do not maintain a fixed effort enum; choose and validate levels from `codex debug models` at launch time.
+- `SpeedTier`: use `-c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"'` when the user requests a service tier and the current account/model advertises it.
 - `WebSearch`: interactive `codex --search` only. `codex exec` does not support `--search`.
 - `DocsMCP`: use inner Codex docs tooling. Prefer `openaiDeveloperDocs` for OpenAI/Codex topics when present. Use third-party docs MCPs such as `context7` for non-OpenAI docs.
 - `ToolDirective`: resolve the inner capability class first: `mcp`, `bundled tool`, or `plugin/skill`. Name the resolved class explicitly in the prompt.
@@ -133,7 +133,7 @@ Mode expresses outcome shape. Modifiers decide the actual launch surface.
 - Do not force `Exec` or `Review` when the task really needs an interactive Codex session.
 - Do not use `Review` when the expectation is immediate implementation.
 - Do not use `Parallel` unless the prompt explicitly asks Codex to spawn subagents.
-- Do not claim `xhigh` support for a model unless docs or local behavior support it.
+- Do not claim support for any reasoning level unless the live catalog or verified local behavior supports it.
 
 ## Secondary Surfaces
 

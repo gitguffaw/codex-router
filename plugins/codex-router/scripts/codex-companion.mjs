@@ -96,15 +96,15 @@ const COMMAND_USAGE = {
   setup: "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
   models: "  node scripts/codex-companion.mjs models [--all] [--json]",
   analyze:
-    "  node scripts/codex-companion.mjs analyze [--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+    "  node scripts/codex-companion.mjs analyze [--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
   exec:
-    "  node scripts/codex-companion.mjs exec [--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+    "  node scripts/codex-companion.mjs exec [--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
   review:
-    "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>]",
+    "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>]",
   "adversarial-review":
-    "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus text]",
+    "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus text]",
   task:
-    "  node scripts/codex-companion.mjs task [--wait|--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
+    "  node scripts/codex-companion.mjs task [--wait|--background] [--write] [--resume-last|--resume|--fresh] [--model <selector>] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
   status: "  node scripts/codex-companion.mjs status [job-id] [--wait] [--timeout-ms <ms>] [--all] [--json]",
   "await-result": "  node scripts/codex-companion.mjs await-result <job-id> [--timeout-ms <ms>] [--json]",
   result: "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -917,7 +917,7 @@ async function handleReviewCommand(argv, config) {
     config.reviewName === "Adversarial Review" ? "/codex-router:adversarial-review" : "/codex-router:review";
 
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "cwd", "effort"],
+    valueOptions: ["base", "scope", "model", "cwd", "effort", "service-tier"],
     arrayOptions: ["config", "enable", "disable"],
     booleanOptions: ["json", "background", "wait", "best", "fast", "spark", "search", "docs", "parallel", "tool"],
     aliasMap: {
@@ -937,7 +937,8 @@ async function handleReviewCommand(argv, config) {
     effort: options.effort,
     best: Boolean(options.best),
     fast: Boolean(options.fast),
-    spark: Boolean(options.spark)
+    spark: Boolean(options.spark),
+    serviceTier: options["service-tier"]
   }, { cwd });
   const { modelControls, modelWarning } = await applyDefaultModelFallback(cwd, requestedModelControls);
   const configArgs = collectConfigArgs(options);
@@ -1004,7 +1005,7 @@ async function handleReviewCommand(argv, config) {
 
 async function handleRouterTurn(argv, mode) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", "tool"],
+    valueOptions: ["model", "effort", "service-tier", "cwd", "prompt-file", "tool"],
     arrayOptions: ["config", "enable", "disable"],
     booleanOptions: ["json", "background", "wait", "search", "docs", "parallel", "best", "fast", "spark", "resume-last", "resume", "fresh"],
     aliasMap: {
@@ -1027,7 +1028,8 @@ async function handleRouterTurn(argv, mode) {
     effort: options.effort,
     best: Boolean(options.best),
     fast: Boolean(options.fast),
-    spark: Boolean(options.spark)
+    spark: Boolean(options.spark),
+    serviceTier: options["service-tier"]
   }, { cwd });
   const { modelControls, modelWarning } = await applyDefaultModelFallback(cwd, requestedModelControls);
   const configArgs = collectConfigArgs(options);

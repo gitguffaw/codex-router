@@ -144,9 +144,12 @@ test("cli command exposes raw Codex CLI escape hatch", () => {
   assert.match(source, /features list/);
   assert.match(source, /mcp list/);
   assert.match(source, /plugin list/);
+  assert.match(source, /installed CLI's current flags/i);
+  assert.match(source, /without a Router release/i);
   assert.match(source, /Return stdout and stderr verbatim/i);
   assert.match(readme, /### `\/codex-router:cli`/);
   assert.match(readme, /\/codex-router:cli features list/);
+  assert.match(readme, /\/codex-router:cli app-server --help/);
   assert.match(readme, /raw Codex CLI escape hatch/i);
 });
 
@@ -159,13 +162,34 @@ test("models command exposes the live Codex model catalog", () => {
   assert.match(source, /\[--all\] \[--json\]/);
   assert.match(source, /effective default model/i);
   assert.match(source, /supported effort levels/i);
+  assert.match(source, /live catalog's descriptions of those effort levels/i);
   assert.match(source, /hidden catalog entries/i);
-  assert.match(source, /`fast` service tier/);
-  assert.match(source, /aliases such as `spark`/i);
+  assert.match(source, /every additional service tier advertised by each model/i);
+  assert.match(source, /aliases derived from the current visible catalog/i);
   assert.match(source, /Do not summarize or condense it/i);
   assert.match(readme, /### `\/codex-router:models`/);
   assert.match(readme, /\/codex-router:models --json/);
   assert.match(readme, /`--all` includes hidden catalog entries/i);
+});
+
+test("README explains catalog-driven model, effort, and service-tier selection", () => {
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+
+  assert.match(readme, /Choose a model, reasoning effort, and service tier/i);
+  assert.match(readme, /Every `models` invocation reads `codex debug models`/i);
+  assert.match(readme, /Omit model flags.*inherit the active Codex configuration/i);
+  assert.match(readme, /`--model <selector>`.*exact live slug or a short alias shown by `models`/i);
+  assert.match(readme, /`--best`.*highest-priority visible model/i);
+  assert.match(readme, /catalog priority, not a benchmark/i);
+  assert.match(readme, /`--spark`.*Compatibility shorthand for `--model spark`/i);
+  assert.match(readme, /not a Router-maintained allowlist/i);
+  assert.match(readme, /New levels work without a Router release/i);
+  assert.match(readme, /`--service-tier <tier>`.*tier shown by `models`/i);
+  assert.match(readme, /`--fast` does not lower the effort level/i);
+  assert.match(readme, /Rescue accepts `--model <selector>` and `--effort`, but it does not perform `--best` or service-tier/i);
+  assert.match(readme, /`-c`\/`--config <key=value>` forwards arbitrary Codex configuration keys without a Router allowlist/i);
+  assert.match(readme, /`\/codex-router:cli --help`/i);
+  assert.match(readme, /Per-run Router flags take precedence over those defaults/i);
 });
 
 test("rescue command absorbs continue semantics", () => {
@@ -187,8 +211,8 @@ test("rescue command absorbs continue semantics", () => {
   assert.doesNotMatch(rescue, /^context:\s*fork\b/m);
   assert.match(rescue, /--background\|--wait/);
   assert.match(rescue, /--resume\|--fresh/);
-  assert.match(rescue, /--model <model\|spark>/);
-  assert.match(rescue, /--effort <none\|minimal\|low\|medium\|high\|xhigh>/);
+  assert.match(rescue, /--model <selector>/);
+  assert.match(rescue, /--effort <level>/);
   assert.match(rescue, /--config <key=value>/);
   assert.match(rescue, /--enable <feature>/);
   assert.match(rescue, /--disable <feature>/);
@@ -202,7 +226,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /`--model` and `--effort` are runtime-selection flags/i);
   assert.match(rescue, /Codex config controls/i);
   assert.match(rescue, /Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort/i);
-  assert.match(rescue, /If they ask for `spark`, map it to `gpt-5\.3-codex-spark`/i);
+  assert.match(rescue, /Preserve exact selectors and aliases such as `spark`.*live catalog/i);
   assert.match(rescue, /If the request includes `--resume`, do not ask whether to continue/i);
   assert.match(rescue, /If the request includes `--fresh`, do not ask whether to continue/i);
   assert.match(rescue, /If the user chooses continue, add `--resume`/i);
@@ -226,7 +250,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(agent, /Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`/i);
   assert.match(agent, /Leave `--effort` unset unless the user explicitly requests a specific reasoning effort/i);
   assert.match(agent, /Leave model unset by default/i);
-  assert.match(agent, /If the user asks for `spark`, map that to `--model gpt-5\.3-codex-spark`/i);
+  assert.match(agent, /If the user asks for `spark` or another alias shown by `models`, pass that selector through with `--model`/i);
   assert.match(agent, /If the user asks for a concrete model name such as `gpt-5\.4-mini`, pass it through with `--model`/i);
   assert.match(agent, /Codex config controls/i);
   assert.match(agent, /Return the stdout of the `codex-companion` command exactly as-is/i);
@@ -241,21 +265,22 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /That prompt drafting is the only Claude-side work allowed/i);
   assert.match(runtimeSkill, /Leave `--effort` unset unless the user explicitly requests a specific effort/i);
   assert.match(runtimeSkill, /Leave model unset by default/i);
-  assert.match(runtimeSkill, /Map `spark` to `--model gpt-5\.3-codex-spark`/i);
+  assert.match(runtimeSkill, /Preserve model selectors and aliases such as `spark`/i);
   assert.match(runtimeSkill, /If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only/i);
   assert.match(runtimeSkill, /Always call internal `task --watch` without `--background`/i);
   assert.match(runtimeSkill, /watcher may expire, but the active worker must continue/i);
   assert.match(runtimeSkill, /If the forwarded request includes `-c`\/`--config`, `--enable`, or `--disable`, pass those controls through to `task`/i);
   assert.match(runtimeSkill, /Strip it before calling `task`/i);
-  assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
+  assert.match(runtimeSkill, /`--effort`: pass through the requested level.*Do not maintain a fixed list/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(runtimeSkill, /If Bash expires after reporting `Codex rescue started as <job-id>`/i);
   assert.match(runtimeSkill, /If the Bash call fails before a job id is reported or Codex cannot be invoked, return nothing/i);
   assert.match(readme, /`codex-router:codex-rescue` subagent/i);
   assert.match(readme, /if you do not pass `--model` or `--effort`, Codex chooses its own defaults/i);
-  assert.match(readme, /--best --effort medium/i);
+  assert.match(readme, /\/codex-router:rescue --model <selector-from-models> --effort <level-from-models>/i);
+  assert.doesNotMatch(readme, /\/codex-router:rescue --best/i);
   assert.doesNotMatch(readme, /gpt-5\.4-mini/);
-  assert.match(readme, /`spark`, the plugin maps that to `gpt-5\.3-codex-spark`/i);
+  assert.match(readme, /aliases such as `spark` resolve from the live model catalog/i);
   assert.match(readme, /continue a previous Codex task/i);
   assert.match(readme, /### `\/codex-router:setup`/);
   assert.match(readme, /### `\/codex-router:review`/);

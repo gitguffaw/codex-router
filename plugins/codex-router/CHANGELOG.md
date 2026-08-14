@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.2
+
+- Replace Router's fixed reasoning-effort enum with live catalog validation. Explicit and `--best` model selections accept every effort the selected model advertises, including `max`, `ultra`, and future values; inherited-model runs pass the requested effort through for Codex to validate.
+- Resolve short model selectors from visible catalog aliases and current slug suffixes instead of pinning versioned targets. Exact live slugs still win, alias collisions are rejected, and the `--spark` compatibility flag now delegates to the current live `spark` alias.
+- Add generic `--service-tier <tier>` selection backed by each model's live `additional_speed_tiers`, with `--fast` retained as a compatibility alias. `--best` filters by both requested effort and tier before applying catalog priority.
+- Expand the `models` JSON and rendered output with live effort descriptions, service tiers, dynamic aliases, and effective-default details.
+- Expand README and command/policy documentation with an explicit command chooser, end-to-end examples, model/effort/tier precedence, persistent configuration guidance, and raw CLI discovery for future Codex flags that are not first-class Router controls.
+- Add forward-compatibility tests for new effort levels and service tiers, version-shifted model slugs, explicit catalog aliases, unsupported-value rejection, and isolated stale-model configuration fixtures.
+- Verify the release path through the installed Codex runtime with real foreground analyze, foreground exec, review, background status/result reconciliation, live model discovery, and raw CLI help passthrough, in addition to the automated test, lint, build, and version checks.
+
 ## 2.4.1
 
 - Decouple rescue watcher expiration from worker lifetime. Rescue now launches a detached tracked worker through internal `task --watch`, watches only its exact session-authorized job id, and leaves active work running if Bash or its subagent watcher expires. Tracked workers also record periodic heartbeats without imposing a runtime cap.

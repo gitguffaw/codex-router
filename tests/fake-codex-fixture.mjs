@@ -253,7 +253,7 @@ if (args[0] === "debug" && args[1] === "models") {
         default_reasoning_level: "medium",
         visibility: "list",
         priority: 0,
-        supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }],
+        supported_reasoning_levels: [{ effort: "low", description: "Fast responses with lighter reasoning" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }],
         additional_speed_tiers: ["fast"]
       },
       {

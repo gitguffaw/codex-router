@@ -6,15 +6,16 @@ Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` comm
 
 Host adapters (Claude Code slash commands and the AGY skill) call the companion CLI at `plugins/codex-router/scripts/codex-companion.mjs`. Structured job and context-pack records are written on disk; there is no separate versioned host-facing JSON-RPC Core API beyond that companion surface and its `--json` outputs.
 
-## What's New In 2.4.1
+## What's New In 2.4.2
 
-- Rescue now runs Codex in a detached tracked worker while a separate watcher follows only the exact authorized job. If Bash or the watcher expires, active Codex work continues and remains available through `/codex-router:status <job-id>` and `/codex-router:result <job-id>`.
-- Background analyze and exec jobs install session-scoped completion watchers that emit one concise terminal-status notification without injecting the full result into context.
-- Active workers record advisory heartbeats without a runtime deadline. If an active job's per-job file is missing or corrupt, a heartbeat reconstructs its complete ownership record without resurrecting cancelled or unindexed jobs.
-- The arbitrary 50-job retention cap is gone. Job records, logs, and stored results remain available until an explicit retention policy is introduced.
-- `--wait` and `--background` are mutually exclusive across applicable commands, `status --wait` defaults to 30 minutes, and command-specific help cannot accidentally become prompt text or launch Codex.
-- The marketplace now also ships the minimal `codex-cli` plugin for explicit raw Codex CLI workflows without Router-managed job guarantees.
-- See [2.4.0](./plugins/codex-router/CHANGELOG.md#240) for the preceding job-state, process-identity, and write-boundary hardening.
+- Model controls now come from the installed Codex catalog instead of Router-maintained enums or pinned aliases. Newly advertised model slugs, effort levels, aliases, and service tiers work without a Router release.
+- `--effort <level>` accepts the selected model's live advertised values, including `max`, `ultra`, and future levels. Router validates explicit catalog selections without silently lowering the request.
+- `--service-tier <tier>` supports any additional tier advertised by the selected model. `--fast` remains a convenience alias for `--service-tier fast`.
+- Short values passed to `--model`, such as `sol`, `terra`, and `spark`, resolve dynamically from the visible catalog. `--spark` is the compatibility shorthand for `--model spark`. `--best` selects the highest-priority visible model compatible with the requested effort and service tier.
+- `/codex-router:models` now reports live effort descriptions, additional service tiers, dynamic aliases, and the effective default so users can choose controls from current runtime facts.
+- The command guide now explains every first-class Router surface with examples, distinguishes tracked policy routes from the raw CLI escape hatch, and documents persistent model/effort configuration.
+- Raw CLI help remains available for Codex flags that Router does not yet model, while Router-owned safety, permission, and lifecycle flags stay explicit.
+- See [2.4.1](./plugins/codex-router/CHANGELOG.md#241) for detached rescue workers, exact-job watcher reconciliation, uncapped job retention, and background completion notifications.
 
 See [CHANGELOG.md](./CHANGELOG.md) for public release history.
 
@@ -41,16 +42,223 @@ Do not submit until Codex reports no blocking findings.
 
 The skill deliberately does not provide Router-managed detached jobs, cross-session status/result/cancel records, orphan recovery, stop hooks, or cryptographic review receipts. Use the full `codex-router` plugin when those guarantees are required.
 
-## What You Get
+## Which Command Should I Use?
 
-- `/codex-router:analyze` for policy-backed read-only Codex analysis
-- `/codex-router:exec` for policy-backed write-capable Codex execution
-- `/codex-router:review` for a normal read-only Codex review
-- `/codex-router:adversarial-review` for a steerable challenge review
-- `/codex-router:models` for the live Codex model catalog, effort support, and effective default
-- `/codex-router:rescue`, `/codex-router:status`, `/codex-router:result`, and `/codex-router:cancel` to delegate work and manage background jobs
-- `/codex-router:cli` as a raw Codex CLI escape hatch for features that are not first-class router commands
-- an Antigravity `codex-router` skill that calls the same companion runtime
+Codex Router provides several entrypoints because asking a question, changing code, reviewing a diff, and managing a long-running job have different safety and output requirements. The command names are less important than the boundary each command establishes:
+
+- **Policy-backed** means Codex Router gives Codex explicit, versioned instructions about read/write permissions, model controls, tool routing, and expected output. For analyze and exec jobs, it records those choices in a context pack so the run can be inspected later.
+- **Read-only** means Codex may inspect the repository and reason about it, but it must not edit files. Use a write-capable command only when you actually want a patch.
+- **Tracked job** means the run gets a job ID, persisted status, logs, and stored output. You can inspect it with `status`, retrieve it with `result`, or stop it with `cancel`.
+- **Foreground** means the command waits and returns the final Codex output. **Background** means it returns a tracked job ID immediately; the full output remains behind `/codex-router:result`. Automatic originating-session completion watchers are installed specifically for Claude Code `analyze` and `exec`. Other surfaces use their documented host behavior and `/codex-router:result`.
+
+### Quick chooser
+
+| What you want | Use | Can it edit files? | What you get |
+| --- | --- | --- | --- |
+| Understand code, diagnose a problem, research an option, or compare approaches | `/codex-router:analyze` | No | A prompt-directed explanation or recommendation, recorded as a Router job |
+| Ask Codex to implement a clearly bounded change | `/codex-router:exec` | Yes | Repository edits plus Codex's implementation and verification summary |
+| Check the current Git diff for concrete defects before shipping | `/codex-router:review` | No | A conventional code review with prioritized findings tied to the selected Git scope |
+| Challenge whether the implementation or architecture is the right approach | `/codex-router:adversarial-review` | No | A steerable review of assumptions, tradeoffs, failure modes, and alternatives |
+| Hand Codex a problem to investigate or fix, with an easy path to resume the same task later | `/codex-router:rescue` | Only for explicit fix work | A tracked, resumable Codex task managed through the rescue subagent |
+| See which Codex models and reasoning levels are actually available on this machine | `/codex-router:models` | No | The live catalog, supported effort levels, aliases, additional service tiers, and effective default |
+| Inspect, wait for, retrieve, or stop a tracked job | `/codex-router:status`, `/codex-router:result`, or `/codex-router:cancel` | `/codex-router:cancel` only stops work | Job state, complete stored output, or cancellation of the exact active job |
+| Check whether Codex Router is installed and authenticated, or configure the optional review gate | `/codex-router:setup` | It may offer installation or configuration changes | A readiness report and guided remediation |
+| Use a Codex CLI feature that Router does not expose directly | `/codex-router:cli` | Depends on the raw command | Unmodified Codex CLI stdout/stderr without Router job tracking or policy routing |
+| Use the same Router runtime from Antigravity rather than Claude Code | Antigravity `codex-router` skill | Depends on the selected Router mode | The same tracked jobs and stored results through an AGY-native skill |
+
+### Analyze: answer a question without changing anything
+
+Use `analyze` when the deliverable is understanding: a diagnosis, explanation, comparison, research result, or implementation recommendation. Codex can read the repository and, when requested, use its own search, documentation, MCP, plugin, or parallel-agent capabilities. It cannot apply the recommendation.
+
+```bash
+/codex-router:analyze explain why token refresh sometimes races with logout
+/codex-router:analyze --docs compare this SDK integration with the current upstream documentation
+/codex-router:analyze --parallel compare three ways to remove this database bottleneck
+```
+
+Choose `review` instead when you already have a Git diff and want defects found in that diff. Choose `exec` when you want Codex to make the change.
+
+### Exec: make a bounded repository change
+
+Use `exec` when you can describe the desired change and want Codex to implement it directly. It is the policy-routed write surface: Codex receives workspace-write permission, edits the current checkout, and reports what it changed and how it verified the result.
+
+```bash
+/codex-router:exec fix the token-refresh race with the smallest safe change and run the focused tests
+/codex-router:exec --docs update this integration to the current SDK API
+/codex-router:exec --background implement the approved migration and run the repository checks
+```
+
+Choose `rescue` instead when the task is exploratory ("figure this out and fix it"), when you may want to resume the same Codex thread, or when you want the rescue subagent to manage the handoff. Choose `exec` when the scope and expected implementation are already clear.
+
+### Review: find defects in the code that changed
+
+Use `review` for a normal pre-ship code review. Codex selects the working tree or compares the current branch with `--base <ref>`, then looks for correctness, reliability, security, and regression issues. It reports findings but does not fix them.
+
+```bash
+/codex-router:review
+/codex-router:review --base main
+/codex-router:review --base main --background
+```
+
+This is different from `analyze`: review is anchored to a Git change set and is optimized for actionable defects. Analyze is anchored to a question and can examine broader architecture or external information.
+
+### Adversarial review: challenge the approach, not only the lines
+
+Use `adversarial-review` when a conventional defect pass is not enough. “Adversarial” means Codex actively tries to disprove the chosen approach: it questions assumptions, identifies failure modes, weighs alternatives, and follows the focus text you provide. It remains read-only.
+
+```bash
+/codex-router:adversarial-review --base main challenge whether this queue design survives retries and partial failure
+/codex-router:adversarial-review --background focus on data loss, rollback, and race conditions
+```
+
+A focused `/codex-router:review` request is promoted to this same path because native Codex review does not accept custom focus instructions alongside a Git target.
+
+### Rescue: hand Codex ownership of a problem
+
+Use `rescue` when you want to delegate the problem rather than prescribe a known edit. The rescue subagent forwards the task to a detached, tracked Codex worker and watches that exact job. Diagnosis-only requests stay read-only; explicit fix requests allow Codex to edit. Follow-up requests can resume the same Codex thread.
+
+```bash
+/codex-router:rescue investigate why CI fails only on Windows
+/codex-router:rescue fix the Windows-only failure and verify the patch
+/codex-router:rescue --resume apply the safer option from the previous investigation
+/codex-router:rescue --background investigate the intermittent production timeout
+```
+
+If the watcher expires, the active worker continues. Keep the reported job ID and use `status` or `result`; do not start a duplicate rescue job.
+
+### Models: inspect availability before choosing one
+
+Use `models` when you need facts about the local Codex installation rather than a Codex task. It queries the live catalog and tells you which models are visible, which effort levels and additional service tiers they support, the catalog's current descriptions of those effort levels, what dynamic aliases such as `spark` resolve to, and which model Router will use by default.
+
+```bash
+/codex-router:models
+/codex-router:models --all
+/codex-router:models --json
+```
+
+It does not analyze code, start a tracked job, or change model configuration.
+
+### Choose a model, reasoning effort, and service tier
+
+Model selection answers **which Codex model runs**. Reasoning effort answers **how much reasoning depth that model is asked to use**. A service tier requests an additional runtime class such as lower-latency capacity. These controls are independent: `--fast` does not lower the effort level, and raising effort does not make a model write-capable.
+
+The installed Codex runtime is the source of truth. Every `models` invocation reads `codex debug models`; Router does not keep a second model registry or a fixed list of effort levels and service tiers. Start by inspecting that live catalog:
+
+```bash
+/codex-router:models
+```
+
+Then select a model in one of four ways:
+
+| Selection | Meaning |
+| --- | --- |
+| Omit model flags | Inherit the active Codex configuration. If no model is pinned, Codex uses its current default. |
+| `--model <selector>` | Use an exact live slug or a short alias shown by `models`. Aliases are derived from the current visible catalog instead of pinned to a versioned slug. |
+| `--best` | Select the highest-priority visible model that satisfies the requested effort and service tier. This is catalog priority, not a benchmark of model intelligence. |
+| `--spark` | Compatibility shorthand for `--model spark`; the `spark` alias resolves from the current catalog. |
+
+Exact slugs always win, including an explicitly requested hidden model. Router displays and resolves a short alias only when it identifies exactly one visible model; if multiple visible models claim the same alias, the command fails and asks for an exact slug instead of silently choosing one.
+
+Choose at most one explicit model selector per command: `--model`, `--spark`, or `--best`. `--service-tier` and `--fast` are compatible modifiers and may be combined with that selector. Used without another model selector, a service-tier request triggers compatible catalog selection. If explicit selectors are combined, an explicit `--model` takes precedence over `--spark`, which takes precedence over catalog selection with `--best` or a requested service tier.
+
+`--best`, `--spark`, `--service-tier`, and `--fast` are supported by `analyze`, `exec`, `review`, and `adversarial-review`. Rescue accepts `--model <selector>` and `--effort`, but it does not perform `--best` or service-tier catalog selection.
+
+#### Effort levels are live data
+
+Choose reasoning effort with `--effort <level>`, using a value shown for the selected model by `models`. Names such as `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` are examples observed in current catalogs, not a Router-maintained allowlist. New levels work without a Router release as soon as the installed Codex catalog advertises them.
+
+Higher effort usually takes longer and consumes more model usage. It does not grant more tools or broader file permissions. When Router selects or receives an explicit catalog model, it validates the requested effort against that live model entry and fails rather than silently lowering it. When the model is inherited from Codex configuration, Router forwards the effort unchanged and Codex validates it against the effective model.
+
+#### Service tiers are live data
+
+Use `--service-tier <tier>` with a tier shown by `models`. Router validates it against the selected model's live `additional_speed_tiers` entry. `--fast` remains a convenience alias for `--service-tier fast`; it is not the only tier Router can understand. Used without another model selector, a service-tier request chooses the highest-priority visible model that supports that tier. If no compatible model exists, the command stops instead of silently dropping the request.
+
+Copyable per-run recipes:
+
+```bash
+# Let Router choose the highest-priority compatible visible model from the live catalog.
+/codex-router:analyze --best --effort medium explain the caching failure
+
+# Choose an exact live model or displayed alias and one of its advertised efforts.
+/codex-router:exec --model <selector-from-models> --effort <level-from-models> fix the race and run the tests
+
+# Request the best model that supports both xhigh effort and the fast tier.
+/codex-router:review --best --effort xhigh --fast --base main
+
+# Future service tiers require no Router code change when the catalog advertises them.
+/codex-router:adversarial-review --best --service-tier <tier-from-models> --base main challenge the migration design
+
+# Rescue accepts an exact model or live alias; it does not accept --best.
+/codex-router:rescue --model spark --effort low investigate the flaky test
+```
+
+When you omit `--effort`, Codex inherits `model_reasoning_effort` from the active configuration or uses the selected model's default. A per-run `--effort` overrides that setting for this job. Likewise, `--model`/`--best`/`--spark` override the configured model for this job without rewriting `config.toml`.
+
+To set persistent defaults instead of repeating flags, configure `model` and `model_reasoning_effort` in your user or trusted-project [Codex configuration](#common-configurations). Per-run Router flags take precedence over those defaults. High-level flags such as `--effort` and `--service-tier` also take precedence over conflicting values supplied through `-c`/`--config`.
+
+#### How Router stays compatible with new Codex flags
+
+Router-owned flags such as `--background`, `--best`, and `--write` remain explicit because they control Router policy, permissions, and job lifecycle. Codex-owned values are open-ended:
+
+- `-c`/`--config <key=value>` forwards arbitrary Codex configuration keys without a Router allowlist.
+- `--enable <feature>` and `--disable <feature>` forward feature names without a Router allowlist.
+- `/codex-router:cli --help` and `/codex-router:cli <command> --help` inspect the installed CLI's current flags.
+- `/codex-router:cli <codex args...>` exposes new raw Codex commands and flags before Router has first-class policy handling for them.
+
+Router does not blindly attach unknown CLI flags to policy-backed jobs. Some Codex flags change transport, sandbox, approval, or authentication behavior, so automatic forwarding could violate the read/write boundary promised by `analyze`, `exec`, and `review`.
+
+### Status, result, and cancel: manage an existing job
+
+These commands do not create new Codex work. They operate on jobs created by analyze, exec, review, adversarial review, rescue, or the companion runtime.
+
+```bash
+/codex-router:status                         # list this session's jobs
+/codex-router:status task-abc123             # inspect one exact job
+/codex-router:status task-abc123 --wait      # wait for that job to finish
+/codex-router:result task-abc123             # retrieve its complete stored output
+/codex-router:cancel task-abc123             # stop that exact active job
+```
+
+Prefer the explicit job ID whenever more than one job may be running. `status` is the progress surface; `result` is the full-output surface; `cancel` is the termination surface.
+
+### Setup: verify that Router can run Codex
+
+Use `setup` for installation and configuration, not for repository work. It checks the local Codex binary, app-server support, authentication or custom-provider readiness, and the optional stop-time review gate. When Codex is missing and npm is available, it can offer to install it.
+
+```bash
+/codex-router:setup
+/codex-router:setup --enable-review-gate
+/codex-router:setup --disable-review-gate
+```
+
+Run it when another command reports that Codex is unavailable or unauthenticated. It does not analyze the repository or create a normal tracked job.
+
+### CLI: pass an unmodeled command directly to Codex
+
+Use `cli` as the raw Codex CLI escape hatch when no first-class Router command represents the Codex feature you need. Router passes the remaining arguments to the local `codex` binary and returns its output verbatim.
+
+```bash
+/codex-router:cli --help
+/codex-router:cli app-server --help
+/codex-router:cli doctor
+/codex-router:cli features list
+/codex-router:cli mcp list
+/codex-router:cli cloud status <task-id>
+```
+
+Raw CLI calls do not receive Router's analyze/exec policy context and are not Router-tracked jobs. Do not use `cli` as a substitute for `analyze`, `exec`, `review`, or `rescue` merely because it is more general.
+
+### Antigravity: use the same runtime from AGY
+
+Antigravity does not use the Claude Code slash commands. Its `codex-router` skill teaches AGY to call the same companion runtime, preserve read/write boundaries, capture exact job IDs, and retrieve stored results.
+
+```text
+Use the codex-router skill to ask Codex for a read-only analysis of the cache design.
+Use the codex-router skill to have Codex implement and verify the approved cache fix.
+Use the codex-router skill to review this branch against main.
+```
+
+This is a host adapter, not a separate Codex runtime or MCP server. Jobs launched through AGY use the same on-disk Router job model as jobs launched through Claude Code.
 
 ## Requirements
 
@@ -245,7 +453,7 @@ For implementation work, hand a bounded task to Codex:
 
 ### `/codex-router:models`
 
-Shows the live Codex model catalog for this machine, including which effort levels each model supports, whether the `fast` service tier is available, and what the plugin will treat as the effective default model.
+Shows the live Codex model catalog for this machine, including each model's advertised effort levels and descriptions, additional service tiers, dynamic short aliases, and what the plugin will treat as the effective default model.
 
 Examples:
 
@@ -265,9 +473,10 @@ Effective default behavior:
 Use it when you want:
 
 - the current list of selectable Codex models
-- the supported effort levels for each model
+- the supported effort levels and live descriptions for each model
+- every additional service tier advertised by each model
 - confirmation that a default model pin is still valid
-- the `spark` alias target
+- current short alias targets such as `sol`, `mini`, or `spark`
 
 ### `/codex-router:analyze`
 
@@ -397,7 +606,7 @@ Examples:
 /codex-router:rescue investigate why the tests started failing
 /codex-router:rescue fix the failing test with the smallest safe patch
 /codex-router:rescue --resume apply the top fix from the last run
-/codex-router:rescue --best --effort medium investigate the flaky integration test
+/codex-router:rescue --model <selector-from-models> --effort <level-from-models> investigate the flaky integration test
 /codex-router:rescue --model spark fix the issue quickly
 /codex-router:rescue --background investigate the regression
 ```
@@ -411,7 +620,7 @@ Ask Codex to redesign the database connection to be more resilient.
 **Notes:**
 
 - if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
-- if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
+- aliases such as `spark` resolve from the live model catalog rather than a pinned versioned slug
 - follow-up rescue requests can continue the latest Codex task in the repo
 
 ### `/codex-router:status`

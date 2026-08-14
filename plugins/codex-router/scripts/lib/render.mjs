@@ -276,14 +276,29 @@ export function renderModelsReport(report) {
   }
 
   lines.push("Available models:");
-  lines.push("| Model | Efforts | Fast | Notes |");
+  lines.push("| Model | Efforts | Additional service tiers | Notes |");
   lines.push("| --- | --- | --- | --- |");
   for (const model of report.models) {
     lines.push(
       `| ${escapeMarkdownCell(model.slug ?? "")} | ${escapeMarkdownCell(model.efforts.join(", "))} | ${escapeMarkdownCell(
-        model.supportsFastTier ? "yes" : "no"
+        (model.serviceTiers ?? []).length > 0 ? model.serviceTiers.join(", ") : "none"
       )} | ${escapeMarkdownCell(formatModelNotes(model, report))} |`
     );
+  }
+
+  const effortDescriptions = new Map();
+  for (const model of report.models) {
+    for (const level of model.reasoningLevels ?? []) {
+      if (level.description && !effortDescriptions.has(level.effort)) {
+        effortDescriptions.set(level.effort, level.description);
+      }
+    }
+  }
+  if (effortDescriptions.size > 0) {
+    lines.push("", "Advertised effort levels (live catalog descriptions):");
+    for (const [effort, description] of effortDescriptions) {
+      lines.push(`- ${effort}: ${description}`);
+    }
   }
 
   if (report.nextSteps.length > 0) {

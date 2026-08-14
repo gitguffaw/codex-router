@@ -4,6 +4,7 @@ Public release history for Codex Router is tracked in the plugin changelog at [p
 
 ## Latest
 
+- [2.4.2](./plugins/codex-router/CHANGELOG.md#242): catalog-driven effort levels, dynamic model aliases and service tiers, expanded command/model documentation, forward-compatible raw CLI discovery, and release-focused regression coverage.
 - [2.4.1](./plugins/codex-router/CHANGELOG.md#241): detached rescue workers that survive watcher expiration, exact-job completion notifications, heartbeat-backed job recovery, uncapped job retention, consistent wait/background flags, and safe command-specific help.
 - [2.4.0](./plugins/codex-router/CHANGELOG.md#240): explicit review-directive rejection, corrected write-boundary docs, orphaned-job reconciliation, serialized job start/progress writes, Windows process-identity proof, and worker-launch race closure.
 - [2.3.1](./plugins/codex-router/CHANGELOG.md#231): identity-checked SIGKILL escalation, atomic per-session stop-gate counters, and prompt test-broker reaping.

@@ -140,11 +140,12 @@ test("setup reports not ready when app-server config read fails", () => {
 });
 
 test("setup reports stale chatgpt model pins before the first run", () => {
+  const workspace = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "unsupported-config-model");
 
   const result = run("node", [SCRIPT, "setup", "--json"], {
-    cwd: ROOT,
+    cwd: workspace,
     env: buildEnv(binDir)
   });
 
@@ -259,13 +260,23 @@ test("analyze runs read-only with context-pack metadata", () => {
   assert.ok(routerState.jobs[0].policyHash);
 });
 
-test("exec is write-capable and --best --xhigh --fast starts app-server with config overrides", () => {
+function assertExecCatalogControlsReachAppServer(tierArgs) {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
   initGitRepo(repo);
 
-  const result = run("node", [SCRIPT, "exec", "--wait", "--json", "--best", "--effort", "xhigh", "--fast", "fix cache behavior"], {
+  const result = run("node", [
+    SCRIPT,
+    "exec",
+    "--wait",
+    "--json",
+    "--best",
+    "--effort",
+    "xhigh",
+    ...tierArgs,
+    "fix cache behavior"
+  ], {
     cwd: repo,
     env: buildEnv(binDir)
   });
@@ -297,6 +308,14 @@ test("exec is write-capable and --best --xhigh --fast starts app-server with con
   assert.equal(routerState.jobs[0].write, true);
   assert.ok(routerState.jobs[0].contextPackId);
   assert.ok(routerState.jobs[0].policyHash);
+}
+
+test("exec is write-capable and --best --xhigh --fast starts app-server with config overrides", () => {
+  assertExecCatalogControlsReachAppServer(["--fast"]);
+});
+
+test("exec is write-capable and catalog-driven service tiers reach app-server config", () => {
+  assertExecCatalogControlsReachAppServer(["--service-tier", "fast"]);
 });
 
 test("task without --write stays read-only; task --write is write-capable", () => {
@@ -541,6 +560,11 @@ test("models reports the live visible Codex catalog and effective default", () =
     ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
   );
   assert.deepEqual(payload.models[0].efforts, ["low", "medium", "high", "xhigh"]);
+  assert.deepEqual(payload.models[0].reasoningLevels[0], {
+    effort: "low",
+    description: "Fast responses with lighter reasoning"
+  });
+  assert.deepEqual(payload.models[0].serviceTiers, ["fast"]);
   assert.equal(payload.models[0].supportsFastTier, true);
   assert.deepEqual(payload.models[2].aliases, ["spark"]);
   assert.match(payload.nextSteps.join("\n"), /remove the model pin/i);
