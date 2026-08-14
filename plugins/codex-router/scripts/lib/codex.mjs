@@ -38,7 +38,7 @@
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
-import { readModelCatalog } from "./model-resolution.mjs";
+import { buildCatalogAliasMap, listModelServiceTiers, readModelCatalog } from "./model-resolution.mjs";
 import { binaryAvailable } from "./process.mjs";
 
 const SERVICE_NAME = "claude_code_codex_router_plugin";
@@ -897,34 +897,39 @@ function buildDefaultModelStatus(fields = {}) {
   };
 }
 
-function listReasoningEfforts(model) {
-  const efforts = [];
+function listReasoningLevels(model) {
+  const levels = [];
+  const seen = new Set();
   for (const entry of model?.supported_reasoning_levels ?? []) {
     const effort = typeof entry?.effort === "string" ? entry.effort.trim() : "";
-    if (effort && !efforts.includes(effort)) {
-      efforts.push(effort);
+    if (effort && !seen.has(effort)) {
+      seen.add(effort);
+      levels.push({
+        effort,
+        description: typeof entry?.description === "string" && entry.description.trim() ? entry.description.trim() : null
+      });
     }
   }
-  return efforts;
-}
-
-function modelSupportsFastTier(model) {
-  return (model?.additional_speed_tiers ?? []).includes("fast");
+  return levels;
 }
 
 function normalizeCatalogModelForOutput(model, context = {}) {
   const slug = typeof model?.slug === "string" ? model.slug : null;
   const defaultEffort = typeof model?.default_reasoning_level === "string" ? model.default_reasoning_level : null;
-  const aliases = slug === "gpt-5.3-codex-spark" ? ["spark"] : [];
+  const reasoningLevels = listReasoningLevels(model);
+  const serviceTiers = listModelServiceTiers(model);
+  const aliases = context.aliasesBySlug?.get(slug) ?? [];
 
   return {
     slug,
     displayName: typeof model?.display_name === "string" ? model.display_name : null,
     visibility: typeof model?.visibility === "string" ? model.visibility : null,
     priority: Number.isFinite(model?.priority) ? model.priority : null,
-    efforts: listReasoningEfforts(model),
+    efforts: reasoningLevels.map((entry) => entry.effort),
+    reasoningLevels,
     defaultEffort,
-    supportsFastTier: modelSupportsFastTier(model),
+    serviceTiers,
+    supportsFastTier: serviceTiers.includes("fast"),
     aliases,
     recommended: slug === context.recommendedModel,
     configuredDefault: slug === context.configuredModel,
@@ -1151,6 +1156,7 @@ export async function getCodexModelsReport(cwd, options = {}) {
   }
 
   const includeHidden = Boolean(options.includeHidden);
+  const aliasesBySlug = buildCatalogAliasMap(catalog);
   const modelRows = catalog
     .filter((model) => includeHidden || model?.visibility === "list")
     .sort(sortCatalogModelsByPriority)
@@ -1158,7 +1164,8 @@ export async function getCodexModelsReport(cwd, options = {}) {
       normalizeCatalogModelForOutput(model, {
         recommendedModel,
         configuredModel,
-        effectiveModel
+        effectiveModel,
+        aliasesBySlug
       })
     );
 

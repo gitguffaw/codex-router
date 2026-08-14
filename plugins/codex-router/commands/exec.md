@@ -1,6 +1,6 @@
 ---
 description: Run a policy-backed write-capable Codex execution job
-argument-hint: '[--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <model>] [--fast] [--effort <none|minimal|low|medium|high|xhigh>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]'
+argument-hint: '[--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---

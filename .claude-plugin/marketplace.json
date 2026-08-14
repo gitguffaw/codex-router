@@ -1,20 +1,20 @@
 {
   "name": "codex-router",
   "description": "Live model discovery, policy-backed Codex delegation, and review for Claude Code and AGY.",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "owner": {
     "name": "Compound"
   },
   "metadata": {
     "description": "Codex Router plugin for live model discovery, policy-backed Codex delegation, and review.",
-    "version": "2.4.1"
+    "version": "2.4.2"
   },
   "plugins": [
     {
       "name": "codex-router",
       "displayName": "Codex Router",
       "description": "Route Claude Code work through Codex with live model discovery, reliable jobs, and explicit policy controls.",
-      "version": "2.4.1",
+      "version": "2.4.2",
       "author": {
         "name": "Compound"
       },

@@ -27,14 +27,16 @@ LAST OBSERVED LISTED MODEL IDS:
 - `gpt-5.2`
 
 MODEL / REASONING FACTS:
-- `model_reasoning_effort` supports `minimal | low | medium | high | xhigh`
-- `xhigh` is model-dependent
+- `model_reasoning_effort` values come from each model's live `supported_reasoning_levels` entry
+- reasoning levels are model-dependent and may be added without a Router release
 - model availability, priority, aliases, and service tiers are account/runtime dependent
 - `codex debug models` is the preferred source for the current model catalog
 - use `~/.codex/models_cache.json` only as fallback local state when `codex debug models` is unavailable
 - do not hard-code a permanent default model in this skill
-- for "best + highest think + highest speed", prefer the strongest available model with the highest supported reasoning level and `service_tier="fast"`
-- prefer fast service tier on the strongest model over downgrading to mini/spark unless the user explicitly asks for fastest/low-cost/lightweight
+- choose the highest-priority visible model compatible with the user's requested service tier
+- when the user asks for the highest reasoning, use that selected model's deepest advertised effort
+- do not invent a speed-tier ranking; the live catalog does not define one
+- prefer a requested service tier on the highest-priority compatible model over assuming mini/spark is faster
 
 TOP-LEVEL:
 - `codex`
@@ -57,8 +59,8 @@ TOP-LEVEL:
 
 INTERACTIVE FLAGS:
 - `-m <MODEL_ID>`
-- `-c 'model_reasoning_effort="<minimal|low|medium|high|xhigh>"'`
-- `-c 'service_tier="fast"'`
+- `-c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"'`
+- `-c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"'`
 - `--search`
 - `-s`, `--sandbox`
 - `-a`, `--ask-for-approval`
@@ -71,8 +73,8 @@ INTERACTIVE FLAGS:
 
 EXEC FLAGS:
 - `-m <MODEL_ID>`
-- `-c 'model_reasoning_effort="<minimal|low|medium|high|xhigh>"'`
-- `-c 'service_tier="fast"'`
+- `-c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"'`
+- `-c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"'`
 - `-s`, `--sandbox`
 - `--full-auto`
 - `-C`, `--cd`
@@ -93,8 +95,8 @@ EXEC FACTS:
 
 REVIEW FLAGS:
 - `-c 'model="<MODEL_ID>"'`
-- `-c 'model_reasoning_effort="<minimal|low|medium|high|xhigh>"'`
-- `-c 'service_tier="fast"'`
+- `-c 'model_reasoning_effort="<EFFORT_FROM_LIVE_CATALOG>"'`
+- `-c 'service_tier="<SERVICE_TIER_FROM_LIVE_CATALOG>"'`
 - `--uncommitted`
 - `--base`
 - `--commit`
