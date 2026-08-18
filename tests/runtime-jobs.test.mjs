@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
-import { finalizeJob, listJobs, resolveJobFile, resolveStateDir, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
+import { resolveStoredReviewName } from "../plugins/codex-router/scripts/lib/job-control.mjs";
+import { finalizeJob, listJobs, resolveJobFile, resolveStateDir, saveState, writeJobFile } from "../plugins/codex-router/scripts/lib/state.mjs";
 import {
   claimJobRunning,
   completeTrackedJob,
@@ -352,6 +353,72 @@ test("review --background enqueues a detached tracked review job", async () => {
   const waitedPayload = JSON.parse(waitedStatus.stdout);
   assert.equal(waitedPayload.job.status, "completed");
   assert.equal(waitedPayload.job.kindLabel, "review");
+});
+
+test("resolveStoredReviewName prefers the request, then the stored adversarial kind", () => {
+  assert.equal(
+    resolveStoredReviewName({ kind: "review", jobClass: "review" }, { reviewName: "Adversarial Review" }),
+    "Adversarial Review"
+  );
+  assert.equal(
+    resolveStoredReviewName({ kind: "adversarial-review", jobClass: "review" }, { reviewName: "Review" }),
+    "Review"
+  );
+  assert.equal(
+    resolveStoredReviewName({ kind: "adversarial-review", jobClass: "review" }, {}),
+    "Adversarial Review"
+  );
+  assert.equal(
+    resolveStoredReviewName({ kindLabel: "adversarial-review", jobClass: "review" }, { reviewName: "  " }),
+    "Adversarial Review"
+  );
+  assert.equal(resolveStoredReviewName({ kind: "review", jobClass: "review" }, {}), "Review");
+});
+
+test("task-worker runs an adversarial review when jobClass is review but request.reviewName is missing", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.mkdirSync(path.join(repo, "src"));
+  fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = items[0];\n");
+  run("git", ["add", "src/app.js"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = items[0].id;\n");
+
+  const jobId = "review-missing-name";
+  const record = {
+    id: jobId,
+    kind: "adversarial-review",
+    kindLabel: "adversarial-review",
+    status: "queued",
+    phase: "queued",
+    title: "Codex Adversarial Review",
+    jobClass: "review",
+    summary: "Adversarial Review working tree",
+    pid: null,
+    request: {
+      cwd: repo,
+      focusText: "challenge empty-state handling"
+    }
+  };
+  saveState(repo, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [record]
+  });
+  writeJobFile(repo, jobId, record);
+
+  const worker = run("node", [SCRIPT, "task-worker", "--cwd", repo, "--job-id", jobId], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(worker.status, 0, worker.stderr);
+
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(repo, jobId), "utf8"));
+  assert.equal(stored.status, "completed");
+  assert.equal(stored.result?.review, "Adversarial Review");
+  assert.match(stored.rendered ?? "", /Missing empty-state guard/);
 });
 
 test("status shows phases, hints, and the latest finished job", () => {

@@ -55,6 +55,14 @@ function getJobTypeLabel(job) {
   return "job";
 }
 
+export function resolveStoredReviewName(job, request = {}) {
+  const requested = typeof request.reviewName === "string" ? request.reviewName.trim() : "";
+  if (requested) {
+    return requested;
+  }
+  return getJobTypeLabel(job) === "adversarial-review" ? "Adversarial Review" : "Review";
+}
+
 function stripLogPrefix(line) {
   return line.replace(/^\[[^\]]+\]\s*/, "").trim();
 }

@@ -43,6 +43,7 @@ import { generateJobId, getConfig, setConfig } from "./lib/state.mjs";
 import {
   listReconciledJobs,
   readStoredJob,
+  resolveStoredReviewName,
   sortJobsNewestFirst
 } from "./lib/job-control.mjs";
 import { createTrackedProgress, enqueueBackgroundTask } from "./lib/detached-launch.mjs";
@@ -1125,8 +1126,14 @@ async function handleTaskWorker(argv) {
       logFile
     },
     () => {
-      const run = storedJob.jobClass === "review" ? executeReviewRun : executeTaskRun;
-      return run({
+      if (storedJob.jobClass === "review") {
+        return executeReviewRun({
+          ...request,
+          reviewName: resolveStoredReviewName(storedJob, request),
+          onProgress: progress
+        });
+      }
+      return executeTaskRun({
         ...request,
         onProgress: progress
       });
