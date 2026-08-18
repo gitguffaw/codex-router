@@ -25,6 +25,7 @@ test("context pack records policy hash, workflow, request, modifiers, and non-go
   assert.deepEqual(stored.modifiers, ["webSearch"]);
   assert.deepEqual(stored.nonGoals, ["Do not edit files."]);
   assert.ok(stored.policyFiles.some((file) => file.path === "SKILL.md"));
+  assert.ok(stored.policyFiles.some((file) => file.path === "Workflows/Parallel.md"));
 });
 
 test("context pack ids change with request data while policy hash remains stable", () => {

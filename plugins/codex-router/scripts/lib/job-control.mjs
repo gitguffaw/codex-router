@@ -1,9 +1,17 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getProcessStartTime } from "./process.mjs";
-import { finalizeJob, getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
-import { appendLogLine, isActiveJobStatus, isTerminalJobStatus, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { inspectProcessIdentity } from "./process.mjs";
+import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import {
+  appendLogLine,
+  buildAdoptedResultPatch,
+  finalizeOrphanedJob,
+  isActiveJobStatus,
+  isTerminalJobStatus,
+  ORPHANED_JOB_MESSAGE,
+  SESSION_ID_ENV
+} from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
@@ -17,7 +25,7 @@ function getCurrentSessionId(options = {}) {
   return options.env?.[SESSION_ID_ENV] ?? process.env[SESSION_ID_ENV] ?? null;
 }
 
-function filterJobsForCurrentSession(jobs, options = {}) {
+export function filterJobsForCurrentSession(jobs, options = {}) {
   const sessionId = getCurrentSessionId(options);
   if (!sessionId) {
     return jobs;
@@ -186,45 +194,10 @@ export function enrichJob(job, options = {}) {
   };
 }
 
-export const ORPHANED_JOB_MESSAGE =
-  "Job runtime exited without recording a result. Marked failed by orphan detection.";
+export { buildAdoptedResultPatch, ORPHANED_JOB_MESSAGE };
 
 function isJobProcessAlive(pid, expectedStartTime, options = {}) {
-  const killImpl = options.killImpl ?? process.kill.bind(process);
-  const getProcessStartTimeImpl = options.getProcessStartTimeImpl ?? getProcessStartTime;
-
-  try {
-    killImpl(pid, 0);
-  } catch (probeError) {
-    if (probeError?.code !== "EPERM") {
-      return false;
-    }
-  }
-
-  // The PID exists, but it may be an unrelated process that reused it. A
-  // recorded-vs-current start time mismatch proves reuse; when either side is
-  // unknown, treat the job as alive — a false "dead" verdict would fail a
-  // job that is still running, which is worse than delayed detection.
-  if (expectedStartTime) {
-    const currentStartTime = getProcessStartTimeImpl(pid);
-    if (currentStartTime && currentStartTime !== expectedStartTime) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Patch that syncs a state-index entry to the terminal result its runtime
-// recorded in the job file, instead of overwriting that result.
-export function buildAdoptedResultPatch(stored) {
-  return {
-    status: stored.status,
-    phase: stored.phase ?? null,
-    pid: null,
-    completedAt: stored.completedAt ?? null,
-    ...(stored.threadId ? { threadId: stored.threadId } : {}),
-    ...(stored.errorMessage ? { errorMessage: stored.errorMessage } : {})
-  };
+  return inspectProcessIdentity(pid, expectedStartTime, options).treatAsLive;
 }
 
 export function reconcileOrphanedJobs(workspaceRoot, jobs, options = {}) {
@@ -253,29 +226,7 @@ export function reconcileOrphanedJobs(workspaceRoot, jobs, options = {}) {
     // a cancel command is still a live writer. The whole decision therefore
     // happens under finalizeJob's state lock, against the entry and job file
     // as they exist at that moment.
-    const outcome = finalizeJob(
-      workspaceRoot,
-      job.id,
-      ({ stored }) => {
-        if (stored && isTerminalJobStatus(stored.status)) {
-          // The runtime finished the job but died before its update reached
-          // the state index — adopt the recorded result instead of inventing
-          // a failure.
-          return buildAdoptedResultPatch(stored);
-        }
-        return {
-          status: "failed",
-          phase: "failed",
-          pid: null,
-          errorMessage: ORPHANED_JOB_MESSAGE,
-          completedAt: nowIso()
-        };
-      },
-      {
-        guard: ({ entry }) => entry != null && isActiveJobStatus(entry.status),
-        storedFallback: job
-      }
-    );
+    const outcome = finalizeOrphanedJob(workspaceRoot, job);
 
     if (!outcome.applied) {
       // Another writer (completion or cancel) finalized the job while we

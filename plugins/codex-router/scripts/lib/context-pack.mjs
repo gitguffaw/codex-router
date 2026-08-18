@@ -11,6 +11,7 @@ const POLICY_FILES = [
   "Workflows/Analyze.md",
   "Workflows/Exec.md",
   "Workflows/Review.md",
+  "Workflows/Parallel.md",
   "Workflows/AnalyzeWeb.md",
   "Workflows/AnalyzeDocs.md",
   "Workflows/ToolDirected.md",

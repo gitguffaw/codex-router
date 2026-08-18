@@ -22,7 +22,7 @@ Core constraint:
 Execution mode rules:
 - If the raw arguments include both `--wait` and `--background`, stop with an error and do not invoke the companion runtime.
 - If the raw arguments include `--wait`, do not ask. Run in the foreground.
-- If the raw arguments include `--background`, do not ask. Run in a Claude background task.
+- If the raw arguments include `--background`, do not ask. Run the companion in the foreground so it can detach the tracked worker.
 - Otherwise, estimate the review size before asking:
   - For working-tree review, start with `git status --short --untracked-files=all`.
   - For working-tree review, also inspect both `git diff --shortstat --cached` and `git diff --shortstat`.
@@ -41,7 +41,7 @@ Argument handling:
 - Do not strip `--wait` or `--background` yourself.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
 - Preserve `-c`/`--config`, `--enable`, and `--disable`; the companion runtime passes them to Codex.
-- The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
+- The companion runtime parses `--wait` and `--background`. `--background` enqueues a detached tracked worker the same way analyze and exec do.
 - `/codex-router:adversarial-review` uses the same review target selection as `/codex-router:review`.
 - It supports working-tree review, branch review, and `--base <ref>`.
 - It does not support `--scope staged` or `--scope unstaged`.
@@ -56,14 +56,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" adversarial-review "$AR
 - Do not paraphrase, summarize, or add commentary before or after it.
 - Do not fix any issues mentioned in the review output.
 
-Background flow:
-- Launch the review with `Bash` in the background:
+Background flow (only when `--background` is present):
+
+1. Run the same companion command in the foreground. It detaches the Codex worker and returns a launch stub containing the exact job id.
+2. Extract that exact job id from stdout.
+3. Launch the completion watcher as a Claude background Bash task:
+
 ```typescript
 Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" adversarial-review "$ARGUMENTS"`,
-  description: "Codex adversarial review",
+  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" await-result "${jobId}"`,
+  description: "Codex adversarial review completion",
   run_in_background: true
 })
 ```
-- Do not call `BashOutput` or wait for completion in this turn.
-- After launching the command, tell the user: "Codex adversarial review started in the background. Check `/codex-router:status` for progress."
+
+4. Do not call `BashOutput` or wait for the watcher. Return the original launch stdout verbatim.
+
+The watcher emits one concise terminal-status notification. It does not inject the full Codex result; `/codex-router:result <job-id>` remains the full-output surface.

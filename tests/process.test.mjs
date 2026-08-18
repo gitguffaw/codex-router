@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   getProcessStartTime,
+  inspectProcessIdentity,
   isProcessAlive,
   jobProcessIdentityMatches,
   terminateProcessIfIdentityMatches,
@@ -76,6 +77,39 @@ test("jobProcessIdentityMatches rejects a mismatched start time", () => {
   });
 
   assert.equal(matches, false);
+});
+
+test("inspectProcessIdentity encodes kill, orphan, and broker unknown-start policies", () => {
+  const liveUnknown = inspectProcessIdentity(1234, null, {
+    killImpl() {},
+    getProcessStartTimeImpl() {
+      throw new Error("missing recorded identity must not read start time");
+    }
+  });
+  assert.equal(liveUnknown.alive, true);
+  assert.equal(liveUnknown.canSignal, false);
+  assert.equal(liveUnknown.treatAsLive, true);
+  assert.equal(liveUnknown.looksCurrent, true);
+
+  const liveUnread = inspectProcessIdentity(1234, "recorded-start", {
+    killImpl() {},
+    getProcessStartTimeImpl() {
+      return null;
+    }
+  });
+  assert.equal(liveUnread.canSignal, false);
+  assert.equal(liveUnread.treatAsLive, true);
+  assert.equal(liveUnread.looksCurrent, false);
+
+  const liveMatch = inspectProcessIdentity(1234, "recorded-start", {
+    killImpl() {},
+    getProcessStartTimeImpl() {
+      return "recorded-start";
+    }
+  });
+  assert.equal(liveMatch.canSignal, true);
+  assert.equal(liveMatch.treatAsLive, true);
+  assert.equal(liveMatch.looksCurrent, true);
 });
 
 test("jobProcessIdentityMatches accepts a live pid with a matching start time", () => {

@@ -209,3 +209,49 @@ export function resolveModelControls(input = {}, options = {}) {
     selectedModel: selected
   };
 }
+
+/**
+ * When resolve selected the inherited Codex config model and that pin is
+ * unavailable for a ChatGPT-backed session, re-resolve against the catalog
+ * fallback. loadDefaultModelStatus is the adapter (app-server in prod).
+ */
+export async function applyInheritedModelFallback(modelControls, options = {}) {
+  if (modelControls.model || modelControls.resolvedFrom !== "codex-config") {
+    return {
+      modelControls,
+      modelWarning: null
+    };
+  }
+
+  const loadStatus = options.loadDefaultModelStatus;
+  if (typeof loadStatus !== "function") {
+    return {
+      modelControls,
+      modelWarning: null
+    };
+  }
+
+  const defaultModelStatus = await loadStatus();
+  if (defaultModelStatus?.supported !== false || !defaultModelStatus.fallbackModel) {
+    return {
+      modelControls,
+      modelWarning: null
+    };
+  }
+
+  const fallbackControls = resolveModelControls(
+    {
+      model: defaultModelStatus.fallbackModel,
+      effort: modelControls.effort
+    },
+    options
+  );
+
+  return {
+    modelControls: {
+      ...fallbackControls,
+      resolvedFrom: "fallback-catalog"
+    },
+    modelWarning: `Configured default Codex model "${defaultModelStatus.configuredModel}" is unavailable for this ChatGPT-backed session. Using "${defaultModelStatus.fallbackModel}" instead.`
+  };
+}

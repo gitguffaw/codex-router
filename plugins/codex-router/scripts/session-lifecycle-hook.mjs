@@ -13,11 +13,11 @@ import {
   sendBrokerShutdown,
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
-import { finalizeJob, loadState, resolveStateFile } from "./lib/state.mjs";
-import { isTerminalJobStatus, nowIso } from "./lib/tracked-jobs.mjs";
+import { loadState, resolveStateFile } from "./lib/state.mjs";
+import { SESSION_ENDED_MESSAGE, SESSION_ID_ENV, tombstoneSessionJob } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
-export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
+export { SESSION_ENDED_MESSAGE, SESSION_ID_ENV };
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 
 function readHookInput() {
@@ -38,8 +38,6 @@ function appendEnvVar(name, value) {
   }
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
 }
-
-export const SESSION_ENDED_MESSAGE = "Job failed: its Claude session ended before the job completed.";
 
 function cleanupSessionJobs(cwd, sessionId) {
   if (!cwd || !sessionId) {
@@ -69,47 +67,20 @@ function cleanupSessionJobs(cwd, sessionId) {
     }
     for (const job of candidates) {
       processed.add(job.id);
-      tombstoneSessionJob(workspaceRoot, job);
+      killTombstonedSessionJob(workspaceRoot, job);
     }
   }
 }
 
-function tombstoneSessionJob(workspaceRoot, job) {
+function killTombstonedSessionJob(workspaceRoot, job) {
   // Tombstone FIRST, under the state lock. The index entry must stay: a
   // worker's queued->running start write treats a MISSING entry as recoverable
   // state loss and re-inserts it (allowInsert), so removing the entry here
   // would let a not-yet-verifiable worker resurrect the job and run
-  // write-capable work after its session ended. A terminal entry instead
-  // makes that start write back off. First terminal state wins: an entry
-  // that completed or was cancelled meanwhile is left untouched, and a
-  // stored terminal record (owner finished, index write lost) is left for
-  // read-time reconciliation to adopt.
-  const outcome = finalizeJob(
-    workspaceRoot,
-    job.id,
-    ({ entry, stored }) => {
-      if (!entry || isTerminalJobStatus(entry.status)) {
-        return null;
-      }
-      if (stored && isTerminalJobStatus(stored.status)) {
-        return null;
-      }
-      return {
-        status: "failed",
-        phase: "failed",
-        pid: null,
-        errorMessage: SESSION_ENDED_MESSAGE,
-        completedAt: nowIso()
-      };
-    },
-    { storedFallback: job }
-  );
+  // write-capable work after its session ended.
+  const outcome = tombstoneSessionJob(workspaceRoot, job);
 
-  // Kill with the freshest identity recorded under the lock: a worker that
-  // reached its start write recorded its own pid + start time there, which
-  // the identity check can verify. Terminate only a process whose identity
-  // still matches (alive AND same start time), so a recycled pid an
-  // unrelated process inherited is never signalled. A worker with no
+  // Kill with the freshest identity recorded under the lock. A worker with no
   // provable identity yet is left alone — the tombstone makes it back off
   // at its start write instead.
   const target = outcome.entry ?? job;

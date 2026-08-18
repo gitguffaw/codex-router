@@ -6,7 +6,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mjs";
-import { getProcessStartTime } from "./process.mjs";
+import { getProcessStartTime, inspectProcessIdentity } from "./process.mjs";
 import { resolveStateDir } from "./state.mjs";
 
 export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
@@ -15,14 +15,7 @@ const BROKER_STATE_FILE = "broker.json";
 const BROKER_LOCK_FILE = "broker.lock";
 
 function processMatchesRecord(pid, recordedStartTime) {
-  if (!recordedStartTime) {
-    return true;
-  }
-  const currentStartTime = getProcessStartTime(pid);
-  if (!currentStartTime) {
-    return false;
-  }
-  return currentStartTime === recordedStartTime;
+  return inspectProcessIdentity(pid, recordedStartTime).looksCurrent;
 }
 
 function acquireSpawnLock(cwd) {

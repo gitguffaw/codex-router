@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -35,31 +35,19 @@ import {
   handleTaskResumeCandidateCommand,
   waitForExactJobSnapshot
 } from "./lib/job-commands.mjs";
-import { resolveModelControls } from "./lib/model-resolution.mjs";
-import { binaryAvailable, getProcessStartTime } from "./lib/process.mjs";
+import { applyInheritedModelFallback, resolveModelControls } from "./lib/model-resolution.mjs";
+import { binaryAvailable } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { buildRouterRequest } from "./lib/router.mjs";
-import {
-  finalizeJob,
-  generateJobId,
-  getConfig,
-  setConfig,
-  upsertJob,
-  writeJobFile
-} from "./lib/state.mjs";
+import { generateJobId, getConfig, setConfig } from "./lib/state.mjs";
 import {
   listReconciledJobs,
   readStoredJob,
   sortJobsNewestFirst
 } from "./lib/job-control.mjs";
+import { createTrackedProgress, enqueueBackgroundTask } from "./lib/detached-launch.mjs";
 import {
-  appendLogLine,
-  createJobLogFile,
-  createJobProgressUpdater,
   createJobRecord,
-  createProgressReporter,
-  isTerminalJobStatus,
-  nowIso,
   runTrackedJob
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
@@ -286,36 +274,10 @@ function firstMeaningfulLine(text, fallback) {
 }
 
 async function applyDefaultModelFallback(cwd, modelControls) {
-  if (modelControls.model || modelControls.resolvedFrom !== "codex-config") {
-    return {
-      modelControls,
-      modelWarning: null
-    };
-  }
-
-  const defaultModelStatus = await getCodexDefaultModelStatus(cwd);
-  if (defaultModelStatus.supported !== false || !defaultModelStatus.fallbackModel) {
-    return {
-      modelControls,
-      modelWarning: null
-    };
-  }
-
-  const fallbackControls = resolveModelControls(
-    {
-      model: defaultModelStatus.fallbackModel,
-      effort: modelControls.effort
-    },
-    { cwd }
-  );
-
-  return {
-    modelControls: {
-      ...fallbackControls,
-      resolvedFrom: "fallback-catalog"
-    },
-    modelWarning: `Configured default Codex model "${defaultModelStatus.configuredModel}" is unavailable for this ChatGPT-backed session. Using "${defaultModelStatus.fallbackModel}" instead.`
-  };
+  return applyInheritedModelFallback(modelControls, {
+    cwd,
+    loadDefaultModelStatus: () => getCodexDefaultModelStatus(cwd)
+  });
 }
 
 async function buildSetupReport(cwd, actionsTaken = []) {
@@ -754,18 +716,6 @@ function createCompanionJob({
   });
 }
 
-function createTrackedProgress(job, options = {}) {
-  const logFile = options.logFile ?? createJobLogFile(job.workspaceRoot, job.id, job.title);
-  return {
-    logFile,
-    progress: createProgressReporter({
-      stderr: Boolean(options.stderr),
-      logFile,
-      onEvent: createJobProgressUpdater(job.workspaceRoot, job.id)
-    })
-  };
-}
-
 function buildTaskJob(workspaceRoot, taskMetadata, write, model = null, effort = null) {
   return createCompanionJob({
     prefix: "task",
@@ -809,107 +759,30 @@ async function runForegroundCommand(job, runner, options = {}) {
   return execution;
 }
 
-function spawnDetachedTaskWorker(cwd, jobId) {
-  const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
-  // Test-only escape hatch: overriding the worker binary lets the suite
-  // exercise the spawn-failure path deterministically.
-  const nodeBinary = process.env.CODEX_COMPANION_TASK_WORKER_NODE || process.execPath;
-  const child = spawn(nodeBinary, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
+function companionScriptPath() {
+  return path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
+}
+
+function enqueueCompanionJob(cwd, job, request) {
+  return enqueueBackgroundTask({
     cwd,
-    env: process.env,
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true
+    job,
+    request,
+    scriptPath: companionScriptPath()
   });
-  child.unref();
-  return child;
 }
 
-function failWorkerLaunch(job, logFile, error) {
-  const message = `Failed to launch the background task worker: ${
-    error instanceof Error ? error.message : String(error)
-  }`;
-  appendLogLine(logFile, message);
-  // First terminal state wins: never overwrite a record another writer (a
-  // cancel, or a worker that somehow started) already finalized or advanced.
-  finalizeJob(job.workspaceRoot, job.id, ({ entry }) => {
-    if (!entry || isTerminalJobStatus(entry.status)) {
-      return null;
-    }
-    return {
-      status: "failed",
-      phase: "failed",
-      pid: null,
-      errorMessage: message,
-      completedAt: nowIso()
-    };
-  });
-  return message;
-}
-
-function enqueueBackgroundTask(cwd, job, request) {
-  const { logFile } = createTrackedProgress(job);
-  appendLogLine(logFile, "Queued for background execution.");
-
-  // Persist the queued record (carrying the request payload) BEFORE spawning
-  // the worker, so the detached worker always finds its request when it reads
-  // the job file. The worker records its own pid and start-time identity when it
-  // transitions to running; the parent never probes the child's start time
-  // (that probe is slow on Windows and would race the worker's first read).
-  const queuedRecord = {
-    ...job,
-    status: "queued",
-    phase: "queued",
-    pid: null,
-    processStartTime: null,
-    // The launcher's own identity makes a pre-spawn queued record
-    // reconcilable: if the launcher dies before the worker exists or has its
-    // pid recorded, orphan reconciliation probes this identity instead of
-    // skipping the pid-less record forever.
-    launcherPid: process.pid,
-    launcherProcessStartTime: getProcessStartTime(process.pid),
-    logFile,
-    request
-  };
-  writeJobFile(job.workspaceRoot, job.id, queuedRecord);
-  upsertJob(job.workspaceRoot, queuedRecord);
-
-  let child;
-  try {
-    child = spawnDetachedTaskWorker(cwd, job.id);
-  } catch (error) {
-    throw new Error(failWorkerLaunch(job, logFile, error));
+async function dispatchTrackedRun({ options, cwd, job, request, runner }) {
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    const { payload } = enqueueCompanionJob(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
   }
 
-  // Spawning can also fail asynchronously (EAGAIN, EMFILE, missing binary):
-  // the child then has no pid and emits 'error'. Without a listener that
-  // event would crash the CLI and strand the queued record with pid: null —
-  // a shape orphan reconciliation deliberately skips — so the job would read
-  // as active forever. Finalize it to failed instead.
-  child.on("error", (error) => {
-    failWorkerLaunch(job, logFile, error);
+  await runForegroundCommand(job, (progress) => runner({ ...request, onProgress: progress }), {
+    json: options.json
   });
-
-  // Record the worker pid so a cancel can signal a still-queued worker, but only
-  // while the job is still queued: finalizeJob vetoes if the worker already
-  // advanced the record to running, so this can never clobber the worker's own
-  // authoritative running state.
-  if (child.pid) {
-    finalizeJob(job.workspaceRoot, job.id, ({ entry }) =>
-      entry && entry.status === "queued" ? { pid: child.pid } : null
-    );
-  }
-
-  return {
-    payload: {
-      jobId: job.id,
-      status: "queued",
-      title: job.title,
-      summary: job.summary,
-      logFile
-    },
-    logFile
-  };
 }
 
 async function handleReviewCommand(argv, config) {
@@ -982,25 +855,29 @@ async function handleReviewCommand(argv, config) {
   if (modelWarning && !options.json) {
     process.stderr.write(`${modelWarning}\n`);
   }
-  await runForegroundCommand(
+  if (options.background) {
+    ensureGitRepository(cwd);
+  }
+  const request = {
+    cwd,
+    base: options.base,
+    scope: options.scope,
+    model: modelControls.model,
+    effort: modelControls.effort,
+    configOverrides: modelControls.configOverrides,
+    configArgs,
+    serviceTier: modelControls.serviceTier,
+    contextPack,
+    focusText,
+    reviewName
+  };
+  await dispatchTrackedRun({
+    options,
+    cwd,
     job,
-    (progress) =>
-      executeReviewRun({
-        cwd,
-        base: options.base,
-        scope: options.scope,
-        model: modelControls.model,
-        effort: modelControls.effort,
-        configOverrides: modelControls.configOverrides,
-        configArgs,
-        serviceTier: modelControls.serviceTier,
-        contextPack,
-        focusText,
-        reviewName,
-        onProgress: progress
-      }),
-    { json: options.json }
-  );
+    request,
+    runner: executeReviewRun
+  });
 }
 
 async function handleRouterTurn(argv, mode) {
@@ -1094,15 +971,14 @@ async function handleRouterTurn(argv, mode) {
   }
 
   if (options.background) {
-    ensureCodexAvailable(cwd);
     requireTaskRequest(prompt, resumeLast);
-    const { payload } = enqueueBackgroundTask(cwd, job, request);
-    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
-    return;
   }
-
-  await runForegroundCommand(job, (progress) => executeTaskRun({ ...request, onProgress: progress }), {
-    json: options.json
+  await dispatchTrackedRun({
+    options,
+    cwd,
+    job,
+    request,
+    runner: executeTaskRun
   });
 }
 
@@ -1170,7 +1046,7 @@ async function handleTask(argv) {
       jobId: job.id,
       configArgs
     };
-    const { payload } = enqueueBackgroundTask(cwd, job, request);
+    const { payload } = enqueueCompanionJob(cwd, job, request);
     if (options.watch) {
       // The watcher and worker have deliberately separate lifetimes. If the
       // host Bash call expires, it can terminate this process without sending
@@ -1248,11 +1124,13 @@ async function handleTaskWorker(argv) {
       workspaceRoot,
       logFile
     },
-    () =>
-      executeTaskRun({
+    () => {
+      const run = storedJob.jobClass === "review" ? executeReviewRun : executeTaskRun;
+      return run({
         ...request,
         onProgress: progress
-      }),
+      });
+    },
     { logFile }
   );
 }
