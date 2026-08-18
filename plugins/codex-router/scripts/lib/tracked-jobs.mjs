@@ -219,8 +219,14 @@ export function completeTrackedJob(workspaceRoot, runningRecord, execution, opti
   return finalizeJob(
     workspaceRoot,
     runningRecord.id,
-    ({ entry }) => {
+    ({ entry, stored }) => {
+      // First-terminal-wins on both records. allowInsert recovers a missing
+      // index, but must not overwrite a stored cancel, failure, or tombstone
+      // with a late owner completion.
       if (entry && !isActiveJobStatus(entry.status)) {
+        return null;
+      }
+      if (stored && isTerminalJobStatus(stored.status)) {
         return null;
       }
       return {
@@ -263,7 +269,12 @@ export function failTrackedJob(workspaceRoot, runningRecord, errorMessage, optio
     workspaceRoot,
     runningRecord.id,
     ({ entry, stored }) => {
+      // Same stored-terminal veto as completeTrackedJob: a late owner
+      // exception must not resurrect or clobber a first-terminal result.
       if (entry && !isActiveJobStatus(entry.status)) {
+        return null;
+      }
+      if (stored && isTerminalJobStatus(stored.status)) {
         return null;
       }
       const base = stored ?? runningRecord;
