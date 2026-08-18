@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { terminateProcessIfIdentityMatches, terminateProcessTree } from "./lib/process.mjs";
+import { terminateProcessIfIdentityMatches } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
   clearBrokerSession,
@@ -118,13 +118,18 @@ async function handleSessionEnd(input) {
   }
 
   cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+  // Kill the broker only when its recorded start-time still matches. A
+  // recycled numeric pid with no proven identity must not take down an
+  // unrelated process tree. Missing start-time follows canSignal: do not
+  // signal.
   teardownBrokerSession({
     endpoint: brokerEndpoint,
     pidFile,
     logFile,
     sessionDir,
     pid,
-    killProcess: terminateProcessTree
+    killProcess: (brokerPid) =>
+      terminateProcessIfIdentityMatches(brokerPid, brokerSession?.startTime ?? null)
   });
   clearBrokerSession(cwd);
 }
