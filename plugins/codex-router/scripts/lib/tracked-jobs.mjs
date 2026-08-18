@@ -350,10 +350,13 @@ export function tombstoneSessionJob(workspaceRoot, job) {
     workspaceRoot,
     job.id,
     ({ entry, stored }) => {
-      if (!entry || isTerminalJobStatus(entry.status)) {
-        return null;
-      }
+      // Same adopt-on-stored-terminal policy as finalizeCancelJob and
+      // finalizeOrphanedJob: SessionEnd must heal a running index sitting on
+      // a cancelled or completed file, not leave the split-brain in place.
       if (stored && isTerminalJobStatus(stored.status)) {
+        return buildAdoptedResultPatch(stored);
+      }
+      if (!entry || isTerminalJobStatus(entry.status)) {
         return null;
       }
       return {

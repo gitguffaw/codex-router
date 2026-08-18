@@ -14,7 +14,12 @@ import {
   createJobProgressUpdater,
   failQueuedLaunch,
   failTrackedJob,
-  runTrackedJob
+  finalizeCancelJob,
+  finalizeOrphanedJob,
+  ORPHANED_JOB_MESSAGE,
+  runTrackedJob,
+  SESSION_ENDED_MESSAGE,
+  tombstoneSessionJob
 } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -1514,6 +1519,265 @@ test("failQueuedLaunch does not clobber a stored running record when the index i
   assert.equal(outcome.applied, false);
   assert.equal(listJobs(workspace).find((job) => job.id === jobId).status, "queued");
   assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8")).status, "running");
+});
+
+test("finalizeCancelJob cancels a still-active job and adopts a stored terminal result", () => {
+  const workspace = makeTempDir();
+  const runningId = "task-cancel-running";
+  const splitId = "task-cancel-split";
+  const completedId = "task-cancel-completed";
+  seedIndexedJobs(workspace, [
+    {
+      id: runningId,
+      status: "running",
+      phase: "starting",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: 4242
+    },
+    {
+      id: splitId,
+      status: "running",
+      phase: "starting",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: 88
+    },
+    {
+      id: completedId,
+      status: "completed",
+      phase: "done",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: null
+    }
+  ]);
+  fs.writeFileSync(
+    resolveJobFile(workspace, splitId),
+    `${JSON.stringify(
+      {
+        id: splitId,
+        status: "completed",
+        phase: "done",
+        title: "Codex Task",
+        threadId: "thr_done",
+        completedAt: "2026-03-18T15:32:00.000Z"
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const runningOutcome = finalizeCancelJob(workspace, runningId, {
+    job: { id: runningId, title: "Codex Task" }
+  });
+  const splitOutcome = finalizeCancelJob(workspace, splitId, {
+    job: { id: splitId, title: "Codex Task" }
+  });
+  const completedOutcome = finalizeCancelJob(workspace, completedId, {
+    job: { id: completedId, title: "Codex Task" }
+  });
+
+  assert.equal(runningOutcome.applied, true);
+  const cancelled = listJobs(workspace).find((job) => job.id === runningId);
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.pid, null);
+  assert.equal(cancelled.errorMessage, "Cancelled by user.");
+  const storedCancelled = JSON.parse(fs.readFileSync(resolveJobFile(workspace, runningId), "utf8"));
+  assert.equal(storedCancelled.status, "cancelled");
+  assert.equal(storedCancelled.errorMessage, "Cancelled by user.");
+
+  assert.equal(splitOutcome.applied, true);
+  const adopted = listJobs(workspace).find((job) => job.id === splitId);
+  assert.equal(adopted.status, "completed");
+  assert.equal(adopted.threadId, "thr_done");
+  assert.equal(adopted.errorMessage ?? null, null);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, splitId), "utf8")).status, "completed");
+
+  assert.equal(completedOutcome.applied, true);
+  assert.equal(listJobs(workspace).find((job) => job.id === completedId).status, "completed");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, completedId), "utf8")).status, "completed");
+});
+
+test("tombstoneSessionJob fails a still-active job and adopts a stored terminal result", () => {
+  const workspace = makeTempDir();
+  const runningId = "task-tombstone-running";
+  const cancelledId = "task-tombstone-cancelled";
+  const splitId = "task-tombstone-split";
+  seedIndexedJobs(workspace, [
+    {
+      id: runningId,
+      status: "running",
+      phase: "starting",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: 4242,
+      sessionId: "sess-current"
+    },
+    {
+      id: cancelledId,
+      status: "cancelled",
+      phase: "cancelled",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: null,
+      sessionId: "sess-current"
+    },
+    {
+      id: splitId,
+      status: "running",
+      phase: "starting",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: 88,
+      sessionId: "sess-current"
+    }
+  ]);
+  fs.writeFileSync(
+    resolveJobFile(workspace, splitId),
+    `${JSON.stringify(
+      {
+        id: splitId,
+        status: "cancelled",
+        phase: "cancelled",
+        title: "Codex Task",
+        errorMessage: "Cancelled by user.",
+        completedAt: "2026-03-18T15:32:00.000Z"
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const runningOutcome = tombstoneSessionJob(workspace, {
+    id: runningId,
+    status: "running",
+    title: "Codex Task",
+    sessionId: "sess-current"
+  });
+  const cancelledOutcome = tombstoneSessionJob(workspace, {
+    id: cancelledId,
+    status: "cancelled",
+    title: "Codex Task",
+    sessionId: "sess-current"
+  });
+  const splitOutcome = tombstoneSessionJob(workspace, {
+    id: splitId,
+    status: "running",
+    title: "Codex Task",
+    sessionId: "sess-current"
+  });
+
+  assert.equal(runningOutcome.applied, true);
+  const tombstoned = listJobs(workspace).find((job) => job.id === runningId);
+  assert.equal(tombstoned.status, "failed");
+  assert.equal(tombstoned.pid, null);
+  assert.equal(tombstoned.errorMessage, SESSION_ENDED_MESSAGE);
+  const storedTombstone = JSON.parse(fs.readFileSync(resolveJobFile(workspace, runningId), "utf8"));
+  assert.equal(storedTombstone.status, "failed");
+  assert.equal(storedTombstone.errorMessage, SESSION_ENDED_MESSAGE);
+
+  assert.equal(cancelledOutcome.applied, true);
+  const leftCancelled = listJobs(workspace).find((job) => job.id === cancelledId);
+  assert.equal(leftCancelled.status, "cancelled");
+  assert.notEqual(leftCancelled.errorMessage, SESSION_ENDED_MESSAGE);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, cancelledId), "utf8")).status, "cancelled");
+
+  assert.equal(splitOutcome.applied, true);
+  const adopted = listJobs(workspace).find((job) => job.id === splitId);
+  assert.equal(adopted.status, "cancelled");
+  assert.equal(adopted.errorMessage, "Cancelled by user.");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, splitId), "utf8")).status, "cancelled");
+});
+
+test("finalizeOrphanedJob fails a still-active job and adopts a stored terminal result", () => {
+  const workspace = makeTempDir();
+  const runningId = "task-orphan-running";
+  const cancelledId = "task-orphan-cancelled";
+  const splitId = "task-orphan-split";
+  seedIndexedJobs(workspace, [
+    {
+      id: runningId,
+      status: "running",
+      phase: "starting",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: 4242
+    },
+    {
+      id: cancelledId,
+      status: "cancelled",
+      phase: "cancelled",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: null
+    },
+    {
+      id: splitId,
+      status: "running",
+      phase: "starting",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: 88
+    }
+  ]);
+  fs.writeFileSync(
+    resolveJobFile(workspace, splitId),
+    `${JSON.stringify(
+      {
+        id: splitId,
+        status: "completed",
+        phase: "done",
+        title: "Codex Task",
+        threadId: "thr_late",
+        completedAt: "2026-03-18T15:32:00.000Z"
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const runningOutcome = finalizeOrphanedJob(workspace, {
+    id: runningId,
+    status: "running",
+    title: "Codex Task",
+    jobClass: "task"
+  });
+  const cancelledOutcome = finalizeOrphanedJob(workspace, {
+    id: cancelledId,
+    status: "cancelled",
+    title: "Codex Task",
+    jobClass: "task"
+  });
+  const splitOutcome = finalizeOrphanedJob(workspace, {
+    id: splitId,
+    status: "running",
+    title: "Codex Task",
+    jobClass: "task"
+  });
+
+  assert.equal(runningOutcome.applied, true);
+  const failed = listJobs(workspace).find((job) => job.id === runningId);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.pid, null);
+  assert.equal(failed.errorMessage, ORPHANED_JOB_MESSAGE);
+  const storedFailed = JSON.parse(fs.readFileSync(resolveJobFile(workspace, runningId), "utf8"));
+  assert.equal(storedFailed.status, "failed");
+  assert.equal(storedFailed.errorMessage, ORPHANED_JOB_MESSAGE);
+
+  assert.equal(cancelledOutcome.applied, false);
+  assert.equal(listJobs(workspace).find((job) => job.id === cancelledId).status, "cancelled");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, cancelledId), "utf8")).status, "cancelled");
+
+  assert.equal(splitOutcome.applied, true);
+  const adopted = listJobs(workspace).find((job) => job.id === splitId);
+  assert.equal(adopted.status, "completed");
+  assert.equal(adopted.threadId, "thr_late");
+  assert.equal(adopted.errorMessage ?? null, null);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, splitId), "utf8")).status, "completed");
 });
 
 test("progress updates never resurrect or split a cancelled job", () => {
