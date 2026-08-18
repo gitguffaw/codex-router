@@ -355,6 +355,50 @@ test("review --background enqueues a detached tracked review job", async () => {
   assert.equal(waitedPayload.job.kindLabel, "review");
 });
 
+test("adversarial-review --background enqueues a detached tracked adversarial review job", async () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "README.md"), "hello again\n");
+
+  const launched = run("node", [SCRIPT, "adversarial-review", "--background", "--json", "challenge empty-state handling"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(launched.status, 0, launched.stderr);
+  const launchPayload = JSON.parse(launched.stdout);
+  assert.match(launchPayload.jobId, /^review-/);
+  assert.equal(launchPayload.status, "queued");
+  assert.equal(launchPayload.title, "Codex Adversarial Review");
+
+  // persist-before-spawn: the queued record must already carry adversarial
+  // identity so a worker that reads immediately cannot fall through to native Review.
+  const queued = JSON.parse(fs.readFileSync(resolveJobFile(repo, launchPayload.jobId), "utf8"));
+  assert.equal(queued.kind, "adversarial-review");
+  assert.equal(queued.kindLabel, "adversarial-review");
+  assert.equal(queued.jobClass, "review");
+  assert.equal(queued.request?.reviewName, "Adversarial Review");
+  assert.equal(queued.request?.focusText, "challenge empty-state handling");
+
+  const waitedStatus = run("node", [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(waitedStatus.status, 0, waitedStatus.stderr);
+  const waitedPayload = JSON.parse(waitedStatus.stdout);
+  assert.equal(waitedPayload.job.status, "completed");
+  assert.equal(waitedPayload.job.kindLabel, "adversarial-review");
+
+  const stored = JSON.parse(fs.readFileSync(resolveJobFile(repo, launchPayload.jobId), "utf8"));
+  assert.equal(stored.result?.review, "Adversarial Review");
+});
+
 test("resolveStoredReviewName prefers the request, then the stored adversarial kind", () => {
   assert.equal(
     resolveStoredReviewName({ kind: "review", jobClass: "review" }, { reviewName: "Adversarial Review" }),
