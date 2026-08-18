@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { finalizeJob, listJobs, resolveJobFile, resolveStateDir, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
-import { createJobProgressUpdater, runTrackedJob } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
+import { createJobProgressUpdater, failQueuedLaunch, runTrackedJob } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -1050,6 +1050,89 @@ test("owner re-inserts its result when the index entry disappears mid-run", asyn
   assert.equal(indexed.summary, "did the work");
   const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8"));
   assert.equal(stored.rendered, "done\n");
+});
+
+function seedIndexedJobs(workspace, jobs) {
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs
+  });
+  for (const job of jobs) {
+    fs.writeFileSync(resolveJobFile(workspace, job.id), `${JSON.stringify(job, null, 2)}\n`, "utf8");
+  }
+}
+
+test("failQueuedLaunch fails only a still-queued launch", () => {
+  const workspace = makeTempDir();
+  const queuedId = "task-queued-launch";
+  const runningId = "task-running-launch";
+  const cancelledId = "task-cancelled-launch";
+  seedIndexedJobs(workspace, [
+    {
+      id: queuedId,
+      status: "queued",
+      phase: "queued",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: null
+    },
+    {
+      id: runningId,
+      status: "running",
+      phase: "starting",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: 4242
+    },
+    {
+      id: cancelledId,
+      status: "cancelled",
+      phase: "cancelled",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: null
+    }
+  ]);
+
+  const queuedOutcome = failQueuedLaunch(workspace, queuedId, "Failed to launch the background task worker: spawn ENOENT");
+  const runningOutcome = failQueuedLaunch(workspace, runningId, "Failed to launch the background task worker: spawn ENOENT");
+  const cancelledOutcome = failQueuedLaunch(workspace, cancelledId, "Failed to launch the background task worker: spawn ENOENT");
+
+  assert.equal(queuedOutcome.applied, true);
+  assert.equal(listJobs(workspace).find((job) => job.id === queuedId).status, "failed");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, queuedId), "utf8")).status, "failed");
+
+  assert.equal(runningOutcome.applied, false);
+  const running = listJobs(workspace).find((job) => job.id === runningId);
+  assert.equal(running.status, "running");
+  assert.equal(running.pid, 4242);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, runningId), "utf8")).status, "running");
+
+  assert.equal(cancelledOutcome.applied, false);
+  assert.equal(listJobs(workspace).find((job) => job.id === cancelledId).status, "cancelled");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, cancelledId), "utf8")).status, "cancelled");
+});
+
+test("failQueuedLaunch does not clobber a stored running record when the index is still queued", () => {
+  const workspace = makeTempDir();
+  const jobId = "task-split-launch";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", phase: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+  fs.writeFileSync(
+    resolveJobFile(workspace, jobId),
+    `${JSON.stringify({ id: jobId, status: "running", phase: "starting", pid: 77, title: "Codex Task" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const outcome = failQueuedLaunch(workspace, jobId, "Failed to launch the background task worker: spawn ENOENT");
+
+  assert.equal(outcome.applied, false);
+  assert.equal(listJobs(workspace).find((job) => job.id === jobId).status, "queued");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8")).status, "running");
 });
 
 test("progress updates never resurrect or split a cancelled job", () => {

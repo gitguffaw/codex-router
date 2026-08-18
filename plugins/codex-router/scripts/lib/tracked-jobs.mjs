@@ -277,8 +277,13 @@ export function failTrackedJob(workspaceRoot, runningRecord, errorMessage, optio
 }
 
 export function failQueuedLaunch(workspaceRoot, jobId, errorMessage) {
-  return finalizeJob(workspaceRoot, jobId, ({ entry }) => {
-    if (!entry || isTerminalJobStatus(entry.status)) {
+  return finalizeJob(workspaceRoot, jobId, ({ entry, stored }) => {
+    // A late spawn 'error' must not fail a worker that already claimed
+    // running, or overwrite a first-terminal result already on disk.
+    if (!entry || entry.status !== "queued") {
+      return null;
+    }
+    if (stored && stored.status && stored.status !== "queued") {
       return null;
     }
     return {
