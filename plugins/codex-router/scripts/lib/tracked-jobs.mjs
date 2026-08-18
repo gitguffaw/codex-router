@@ -179,7 +179,19 @@ export function claimJobRunning(workspaceRoot, runningRecord) {
   return finalizeJob(
     workspaceRoot,
     runningRecord.id,
-    ({ entry }) => (entry && isTerminalJobStatus(entry.status) ? null : runningRecord),
+    ({ entry, stored }) => {
+      // First-terminal-wins on both records. allowInsert recovers a missing
+      // index, but must not resurrect a job whose stored file is already
+      // cancelled, failed, or completed (split-brain or index loss after
+      // SessionEnd / cancel).
+      if (entry && isTerminalJobStatus(entry.status)) {
+        return null;
+      }
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return null;
+      }
+      return runningRecord;
+    },
     { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
   );
 }

@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { finalizeJob, listJobs, resolveJobFile, resolveStateDir, saveState } from "../plugins/codex-router/scripts/lib/state.mjs";
-import { createJobProgressUpdater, failQueuedLaunch, runTrackedJob } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
+import {
+  claimJobRunning,
+  createJobProgressUpdater,
+  failQueuedLaunch,
+  runTrackedJob
+} from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -1112,6 +1117,124 @@ test("failQueuedLaunch fails only a still-queued launch", () => {
   assert.equal(cancelledOutcome.applied, false);
   assert.equal(listJobs(workspace).find((job) => job.id === cancelledId).status, "cancelled");
   assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, cancelledId), "utf8")).status, "cancelled");
+});
+
+test("claimJobRunning claims only a still-active launch", () => {
+  const workspace = makeTempDir();
+  const queuedId = "task-claim-queued";
+  const cancelledId = "task-claim-cancelled";
+  seedIndexedJobs(workspace, [
+    {
+      id: queuedId,
+      status: "queued",
+      phase: "queued",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: null
+    },
+    {
+      id: cancelledId,
+      status: "cancelled",
+      phase: "cancelled",
+      title: "Codex Task",
+      jobClass: "task",
+      pid: null
+    }
+  ]);
+
+  const queuedOutcome = claimJobRunning(workspace, {
+    id: queuedId,
+    status: "running",
+    phase: "starting",
+    title: "Codex Task",
+    jobClass: "task",
+    pid: 4242,
+    processStartTime: "start-4242"
+  });
+  const cancelledOutcome = claimJobRunning(workspace, {
+    id: cancelledId,
+    status: "running",
+    phase: "starting",
+    title: "Codex Task",
+    jobClass: "task",
+    pid: 4343,
+    processStartTime: "start-4343"
+  });
+
+  assert.equal(queuedOutcome.applied, true);
+  const claimed = listJobs(workspace).find((job) => job.id === queuedId);
+  assert.equal(claimed.status, "running");
+  assert.equal(claimed.pid, 4242);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, queuedId), "utf8")).status, "running");
+
+  assert.equal(cancelledOutcome.applied, false);
+  assert.equal(listJobs(workspace).find((job) => job.id === cancelledId).status, "cancelled");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, cancelledId), "utf8")).status, "cancelled");
+});
+
+test("claimJobRunning does not resurrect a stored terminal record when the index is still queued", () => {
+  const workspace = makeTempDir();
+  const jobId = "task-claim-split";
+  saveState(workspace, {
+    version: 1,
+    config: { stopReviewGate: false },
+    jobs: [{ id: jobId, status: "queued", phase: "queued", title: "Codex Task", jobClass: "task" }]
+  });
+  fs.writeFileSync(
+    resolveJobFile(workspace, jobId),
+    `${JSON.stringify({ id: jobId, status: "cancelled", phase: "cancelled", title: "Codex Task" }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const outcome = claimJobRunning(workspace, {
+    id: jobId,
+    status: "running",
+    phase: "starting",
+    title: "Codex Task",
+    jobClass: "task",
+    pid: 88,
+    processStartTime: "start-88"
+  });
+
+  assert.equal(outcome.applied, false);
+  assert.equal(listJobs(workspace).find((job) => job.id === jobId).status, "queued");
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8")).status, "cancelled");
+});
+
+test("claimJobRunning does not re-insert a missing index over a stored terminal record", () => {
+  const workspace = makeTempDir();
+  const jobId = "task-claim-missing";
+  saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+  fs.mkdirSync(path.dirname(resolveJobFile(workspace, jobId)), { recursive: true });
+  fs.writeFileSync(
+    resolveJobFile(workspace, jobId),
+    `${JSON.stringify(
+      {
+        id: jobId,
+        status: "failed",
+        phase: "failed",
+        title: "Codex Task",
+        errorMessage: "Job failed: its Claude session ended before the job completed."
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const outcome = claimJobRunning(workspace, {
+    id: jobId,
+    status: "running",
+    phase: "starting",
+    title: "Codex Task",
+    jobClass: "task",
+    pid: 99,
+    processStartTime: "start-99"
+  });
+
+  assert.equal(outcome.applied, false);
+  assert.equal(listJobs(workspace).find((job) => job.id === jobId), undefined);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(workspace, jobId), "utf8")).status, "failed");
 });
 
 test("failQueuedLaunch does not clobber a stored running record when the index is still queued", () => {

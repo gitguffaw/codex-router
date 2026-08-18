@@ -10,12 +10,11 @@ import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { loadBrokerSession, saveBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
 import {
-  finalizeJob,
   resolveJobFile,
   resolveStateDir,
   saveState
 } from "../plugins/codex-router/scripts/lib/state.mjs";
-import { isTerminalJobStatus } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
+import { claimJobRunning } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -207,12 +206,7 @@ test("session end tombstones the ending session's active jobs so surviving worke
     sessionId: "sess-current",
     pid: 99999
   };
-  const startOutcome = finalizeJob(
-    repo,
-    "review-running",
-    ({ entry }) => (entry && isTerminalJobStatus(entry.status) ? null : runningRecord),
-    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
-  );
+  const startOutcome = claimJobRunning(repo, runningRecord);
   assert.equal(startOutcome.applied, false);
   const finalState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
   assert.equal(finalState.jobs.find((job) => job.id === "review-running").status, "failed");
