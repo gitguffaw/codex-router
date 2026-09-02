@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.5.0
+
 - Collapse analyze, exec, review, adversarial-review, and task onto one `launchTrackedCommand` table. Persist `command` as the job kind and `runner` (`turn` | `native` | `steered`) on the request; `jobClass` is `turn` or `native-review`.
 - Reject `--wait` on those launch commands. Foreground is the default; `--wait` remains on `status`. `/codex-router:review` with focus text errors instead of promoting to adversarial-review.
 

@@ -11,7 +11,7 @@ These documents capture the product and architecture direction agreed after revi
 
 ## Status
 
-This is a clean-sheet direction, not a description of code that already exists. The current implementation remains the v2.4.2 JavaScript companion runtime under `plugins/codex-router/scripts/`.
+This is a clean-sheet direction, not a description of code that already exists. The current implementation remains the v2.5.0 JavaScript companion runtime under `plugins/codex-router/scripts/`.
 
 The documents distinguish three kinds of statements:
 

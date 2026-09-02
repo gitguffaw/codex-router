@@ -6,6 +6,12 @@ Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` comm
 
 Host adapters (Claude Code slash commands and the AGY skill) call the companion CLI at `plugins/codex-router/scripts/codex-companion.mjs`. Structured job and context-pack records are written on disk; there is no separate versioned host-facing JSON-RPC Core API beyond that companion surface and its `--json` outputs.
 
+## What's New In 2.5.0
+
+- Analyze, exec, review, adversarial-review, and task share one launch path. Jobs persist `command` plus `runner` (`turn` | `native` | `steered`).
+- Foreground is the default. `--wait` is only valid on `/codex-router:status`. `/codex-router:review` with focus text errors; use `/codex-router:adversarial-review` for steered review.
+- See [2.4.2](./plugins/codex-router/CHANGELOG.md#242) for catalog-driven model, effort, and service-tier controls.
+
 ## What's New In 2.4.2
 
 - Model controls now come from the installed Codex catalog instead of Router-maintained enums or pinned aliases. Newly advertised model slugs, effort levels, aliases, and service tiers work without a Router release.
