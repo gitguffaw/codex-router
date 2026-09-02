@@ -219,7 +219,7 @@ test("task --watch leaves its detached worker running when the watcher is termin
   assert.match(result.stdout, /Handled the requested task/);
 });
 
-test("review with focus text promotes to adversarial review", () => {
+test("review with focus text errors instead of promoting to adversarial review", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
@@ -234,11 +234,9 @@ test("review with focus text promotes to adversarial review", () => {
     env: buildEnv(binDir)
   });
 
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /# Codex Adversarial Review/);
-  assert.match(result.stdout, /Missing empty-state guard/);
-  const state = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
-  assert.match(state.lastTurnStart.prompt, /User focus: focus on auth/);
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /does not support custom focus text/i);
+  assert.match(result.stderr, /adversarial-review/);
 });
 
 test("review rejects staged-only scope because it is native-review only", () => {
@@ -380,8 +378,10 @@ test("adversarial-review --background enqueues a detached tracked adversarial re
   // identity so a worker that reads immediately cannot fall through to native Review.
   const queued = JSON.parse(fs.readFileSync(resolveJobFile(repo, launchPayload.jobId), "utf8"));
   assert.equal(queued.kind, "adversarial-review");
+  assert.equal(queued.command, "adversarial-review");
   assert.equal(queued.kindLabel, "adversarial-review");
-  assert.equal(queued.jobClass, "review");
+  assert.equal(queued.jobClass, "turn");
+  assert.equal(queued.request?.runner, "steered");
   assert.equal(queued.request?.reviewName, "Adversarial Review");
   assert.equal(queued.request?.focusText, "challenge empty-state handling");
 
@@ -2284,7 +2284,7 @@ test("concurrent await-result watchers stay correlated and emit once per exact j
   }
 });
 
-test("wait and background are mutually exclusive on every applicable companion command", () => {
+test("launch commands reject --wait; status is the only waiter", () => {
   const workspace = makeTempDir();
   initGitRepo(workspace);
 
@@ -2293,7 +2293,7 @@ test("wait and background are mutually exclusive on every applicable companion c
       cwd: workspace
     });
     assert.notEqual(result.status, 0, `${subcommand} unexpectedly succeeded`);
-    assert.match(result.stderr, /Choose either --background or --wait, not both/i);
+    assert.match(result.stderr, /--wait is only valid on status/i);
   }
 
   assert.equal(fs.existsSync(resolveStateDir(workspace)), false, "rejected execution flags must not create job state");

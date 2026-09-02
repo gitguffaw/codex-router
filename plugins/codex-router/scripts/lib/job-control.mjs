@@ -33,24 +33,34 @@ export function filterJobsForCurrentSession(jobs, options = {}) {
   return jobs.filter((job) => job.sessionId === sessionId);
 }
 
+export function isTaskJob(job) {
+  if (job?.command) {
+    return job.command === "task";
+  }
+  if (job?.kind === "analyze" || job?.kind === "exec") {
+    return false;
+  }
+  return job?.kind === "task" || job?.jobClass === "task";
+}
+
 function getJobTypeLabel(job) {
+  if (job.command) {
+    return job.command;
+  }
   if (typeof job.kindLabel === "string" && job.kindLabel) {
     return job.kindLabel;
   }
   if (job.kind === "adversarial-review") {
     return "adversarial-review";
   }
-  if (job.jobClass === "review") {
+  if (job.kind === "analyze" || job.kind === "exec" || job.kind === "review" || job.kind === "task") {
+    return job.kind;
+  }
+  if (job.jobClass === "native-review" || job.jobClass === "review") {
     return "review";
   }
   if (job.jobClass === "task") {
-    return "rescue";
-  }
-  if (job.kind === "review") {
-    return "review";
-  }
-  if (job.kind === "task") {
-    return "rescue";
+    return "task";
   }
   return "job";
 }

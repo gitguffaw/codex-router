@@ -1,6 +1,6 @@
 ---
 description: Run a Codex Router review that challenges implementation approach and design choices
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus ...]'
+argument-hint: '[--background] [--base <ref>] [--scope auto|working-tree|branch] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [focus ...]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -20,8 +20,8 @@ Core constraint:
 - Do not pass `--search`, `--docs`, `--tool`, or `--parallel`. Those analyze/exec routing directives are unsupported on review and the companion runtime fails them explicitly.
 
 Execution mode rules:
-- If the raw arguments include both `--wait` and `--background`, stop with an error and do not invoke the companion runtime.
-- If the raw arguments include `--wait`, do not ask. Run in the foreground.
+- Do not forward `--wait` to the companion. Foreground is the default. `--wait` is only valid on `/codex-router:status`.
+- If `$ARGUMENTS` includes `--wait`, strip it before invoking the companion.
 - If the raw arguments include `--background`, do not ask. Run the companion in the foreground so it can detach the tracked worker.
 - Otherwise, estimate the review size before asking:
   - For working-tree review, start with `git status --short --untracked-files=all`.
@@ -37,15 +37,15 @@ Execution mode rules:
   - `Run in background`
 
 Argument handling:
-- Preserve the user's arguments exactly.
-- Do not strip `--wait` or `--background` yourself.
+- Preserve the user's arguments exactly, except strip `--wait`.
+- Do not strip `--background` yourself.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
 - Preserve `-c`/`--config`, `--enable`, and `--disable`; the companion runtime passes them to Codex.
-- The companion runtime parses `--wait` and `--background`. `--background` enqueues a detached tracked worker the same way analyze and exec do.
+- The companion runtime parses `--background`. `--background` enqueues a detached tracked worker the same way analyze and exec do.
 - `/codex-router:adversarial-review` uses the same review target selection as `/codex-router:review`.
 - It supports working-tree review, branch review, and `--base <ref>`.
 - It does not support `--scope staged` or `--scope unstaged`.
-- It can take extra focus text after the flags; focused `/codex-router:review` requests are promoted to this same companion path.
+- It can take extra focus text after the flags. `/codex-router:review` with focus text is an error, not a silent alias of this command.
 
 Foreground flow:
 - Run:

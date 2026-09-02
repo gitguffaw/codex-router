@@ -111,7 +111,7 @@ Use `adversarial-review` when a conventional defect pass is not enough. “Adver
 /codex-router:adversarial-review --background focus on data loss, rollback, and race conditions
 ```
 
-A focused `/codex-router:review` request is promoted to this same path because native Codex review does not accept custom focus instructions alongside a Git target.
+A focused `/codex-router:review` request is an error. Native Codex review does not accept custom focus instructions; use `adversarial-review` for that.
 
 ### Rescue: hand Codex ownership of a problem
 
@@ -482,7 +482,7 @@ Use it when you want:
 
 Runs a read-only Codex analysis job with the vendored Codex policy context recorded in a job context pack.
 
-Use `--wait` to force foreground execution or `--background` to detach the Codex worker. These flags are mutually exclusive. A background analysis installs a session-scoped completion notifier; the notification contains the terminal status and `/codex-router:result <job-id>`, not the full result.
+Foreground is the default. Use `--background` to detach the Codex worker. `--wait` is not an execution mode on analyze; use `/codex-router:status <job-id> --wait` to block on a job. A background analysis installs a session-scoped completion notifier; the notification contains the terminal status and `/codex-router:result <job-id>`, not the full result.
 
 Examples:
 
@@ -500,7 +500,7 @@ Examples:
 
 Runs a direct write-capable Codex execution job. Use this when you explicitly want Codex to make a bounded implementation change through the policy-routed `exec` mode. Read-only commands such as `/codex-router:analyze` and `/codex-router:review` do not edit files. `/codex-router:rescue` is a separate task path that defaults to `task --write` for fix work (and stays read-only when you ask for diagnosis-only). `/codex-router:cli` is a raw escape hatch and is not job-tracked write routing.
 
-Use `--wait` to force foreground execution or `--background` to detach the Codex worker. These flags are mutually exclusive. A background execution installs a session-scoped completion notifier; the notification contains the terminal status and `/codex-router:result <job-id>`, while the full output stays out of context until you request it.
+Foreground is the default. Use `--background` to detach the Codex worker. `--wait` is not an execution mode on exec; use `/codex-router:status <job-id> --wait` to block on a job. A background execution installs a session-scoped completion notifier; the notification contains the terminal status and `/codex-router:result <job-id>`, while the full output stays out of context until you request it.
 
 Examples:
 
@@ -544,7 +544,7 @@ Use it when you want:
 - a review of your current uncommitted changes
 - a review of your branch compared to a base branch like `main`
 
-Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. By default it is not steerable. If you add focus text after the flags, the runtime promotes the request to [`/codex-router:adversarial-review`](#codex-routeradversarial-review) so the focus instructions are honored.
+Use `--base <ref>` for branch review. It also supports `--background`. By default it is not steerable. Focus text after the flags is an error; use [`/codex-router:adversarial-review`](#codex-routeradversarial-review) when you have focus instructions.
 
 Examples:
 
@@ -552,7 +552,7 @@ Examples:
 /codex-router:review
 /codex-router:review --base main
 /codex-router:review --background
-/codex-router:review --background fact-check the runbooks against upstream repository behavior
+/codex-router:adversarial-review --background fact-check the runbooks against upstream repository behavior
 ```
 
 This command is read-only and will not perform any changes. When run in the background you can use [`/codex-router:status`](#codex-routerstatus) to check on the progress and [`/codex-router:cancel`](#codex-routercancel) to cancel the ongoing task.
@@ -566,7 +566,7 @@ Runs a **steerable** review that questions the chosen implementation and design.
 It can be used to pressure-test assumptions, tradeoffs, failure modes, and whether a different approach would have been safer or simpler.
 
 It uses the same review target selection as `/codex-router:review`, including `--base <ref>` for branch review.
-It also supports `--wait` and `--background`, and it is the canonical command for focus text after the flags. `/codex-router:review` with focus text is promoted to this same path.
+It also supports `--background`, and it is the canonical command for focus text after the flags. `/codex-router:review` with focus text errors instead of silently becoming this command.
 
 Use it when you want:
 

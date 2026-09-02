@@ -35,13 +35,13 @@ test("review command uses AskUserQuestion and background Bash while staying revi
   assert.match(source, /Treat untracked files or directories as reviewable work/i);
   assert.match(source, /Recommend waiting only when the review is clearly tiny, roughly 1-2 files total/i);
   assert.match(source, /In every other case, including unclear size, recommend background/i);
-  assert.match(source, /If the raw arguments include both `--wait` and `--background`, stop with an error/i);
-  assert.match(source, /The companion runtime parses `--wait` and `--background`/i);
+  assert.match(source, /Do not forward `--wait` to the companion/i);
+  assert.match(source, /The companion runtime parses `--background`/i);
   assert.match(source, /enqueues a detached tracked worker the same way analyze and exec do/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
-  assert.match(source, /normally uses native review and does not support staged-only review or unstaged-only review/i);
-  assert.match(source, /promotes focused requests to its `adversarial-review` subcommand/i);
+  assert.match(source, /uses native review and does not support staged-only review or unstaged-only review/i);
+  assert.match(source, /Extra focus text is an error/i);
   assert.match(source, /Do not pass `--search`, `--docs`, `--tool`, or `--parallel`/i);
 });
 
@@ -69,8 +69,8 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /Treat untracked files or directories as reviewable work/i);
   assert.match(source, /Recommend waiting only when the scoped review is clearly tiny, roughly 1-2 files total/i);
   assert.match(source, /In every other case, including unclear size, recommend background/i);
-  assert.match(source, /If the raw arguments include both `--wait` and `--background`, stop with an error/i);
-  assert.match(source, /The companion runtime parses `--wait` and `--background`/i);
+  assert.match(source, /Do not forward `--wait` to the companion/i);
+  assert.match(source, /The companion runtime parses `--background`/i);
   assert.match(source, /enqueues a detached tracked worker the same way analyze and exec do/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
@@ -78,7 +78,7 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /supports working-tree review, branch review, and `--base <ref>`/i);
   assert.match(source, /does not support `--scope staged` or `--scope unstaged`/i);
   assert.match(source, /can take extra focus text after the flags/i);
-  assert.match(source, /focused `\/codex-router:review` requests are promoted to this same companion path/i);
+  assert.match(source, /`\/codex-router:review` with focus text is an error/i);
 });
 
 test("continue is not exposed as a user-facing command", () => {
@@ -112,7 +112,7 @@ test("analyze and exec commands route through codex-router runtime", () => {
   assert.match(analyze, /--enable <feature>/);
   assert.match(analyze, /--disable <feature>/);
   assert.match(analyze, /Codex-side routing directives/i);
-  assert.match(analyze, /\[--wait\|--background\]/);
+  assert.match(analyze, /\[--background\]/);
   assert.match(analyze, /await-result/);
   assert.match(analyze, /run_in_background:\s*true/);
   assert.match(analyze, /one concise terminal-status notification/i);
@@ -128,7 +128,7 @@ test("analyze and exec commands route through codex-router runtime", () => {
   assert.match(exec, /--enable <feature>/);
   assert.match(exec, /--disable <feature>/);
   assert.match(exec, /Codex-side routing directives/i);
-  assert.match(exec, /\[--wait\|--background\]/);
+  assert.match(exec, /\[--background\]/);
   assert.match(exec, /await-result/);
   assert.match(exec, /run_in_background:\s*true/);
   assert.match(exec, /one concise terminal-status notification/i);

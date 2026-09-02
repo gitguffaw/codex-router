@@ -8,6 +8,7 @@ import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
   filterJobsForCurrentSession,
+  isTaskJob,
   readStoredJob,
   resolveCancelableJob,
   resolveResultJob,
@@ -84,7 +85,7 @@ export function findLatestResumableTaskJob(jobs) {
   return (
     jobs.find(
       (job) =>
-        job.jobClass === "task" &&
+        isTaskJob(job) &&
         job.threadId &&
         !isActiveJobStatus(job.status)
     ) ?? null

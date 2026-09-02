@@ -241,7 +241,7 @@ test("analyze runs read-only with context-pack metadata", () => {
   installFakeCodex(binDir);
   initGitRepo(repo);
 
-  const result = run("node", [SCRIPT, "analyze", "--wait", "--json", "inspect cache behavior"], {
+  const result = run("node", [SCRIPT, "analyze", "--json", "inspect cache behavior"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
@@ -269,7 +269,6 @@ function assertExecCatalogControlsReachAppServer(tierArgs) {
   const result = run("node", [
     SCRIPT,
     "exec",
-    "--wait",
     "--json",
     "--best",
     "--effort",
