@@ -4,10 +4,11 @@ import path from "node:path";
 import { parseArgs, splitRawArgumentString } from "./args.mjs";
 import { interruptAppServerTurn } from "./codex.mjs";
 import {
-  buildAdoptedResultPatch,
   buildExactJobSnapshot,
   buildSingleJobSnapshot,
   buildStatusSnapshot,
+  filterJobsForCurrentSession,
+  isTaskJob,
   readStoredJob,
   resolveCancelableJob,
   resolveResultJob,
@@ -20,8 +21,8 @@ import {
   renderStatusReport,
   renderStoredJobResult
 } from "./render.mjs";
-import { finalizeJob, listJobs } from "./state.mjs";
-import { appendLogLine, isActiveJobStatus, isTerminalJobStatus, nowIso, SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { listJobs } from "./state.mjs";
+import { appendLogLine, finalizeCancelJob, isActiveJobStatus, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 // Long-running Codex jobs routinely exceed the old four-minute default. Keep
@@ -77,18 +78,14 @@ export function getCurrentClaudeSessionId() {
 }
 
 export function filterJobsForCurrentClaudeSession(jobs) {
-  const sessionId = getCurrentClaudeSessionId();
-  if (!sessionId) {
-    return jobs;
-  }
-  return jobs.filter((job) => job.sessionId === sessionId);
+  return filterJobsForCurrentSession(jobs, { env: process.env });
 }
 
 export function findLatestResumableTaskJob(jobs) {
   return (
     jobs.find(
       (job) =>
-        job.jobClass === "task" &&
+        isTaskJob(job) &&
         job.threadId &&
         !isActiveJobStatus(job.status)
     ) ?? null
@@ -283,37 +280,7 @@ export async function handleCancelCommand(argv) {
     processStartTime: existing.processStartTime ?? job.processStartTime ?? null
   });
 
-  const completedAt = nowIso();
-  const cancelPatch = {
-    status: "cancelled",
-    phase: "cancelled",
-    pid: null,
-    completedAt,
-    errorMessage: "Cancelled by user.",
-    cancelledAt: completedAt
-  };
-
-  // finalizeJob decides and writes the state index and job file together under
-  // the state lock, so this cannot interleave with orphan reconciliation. If
-  // the runtime finished on its own before we took the lock, keep its recorded
-  // result rather than overwriting a real completion with a cancellation.
-  const outcome = finalizeJob(
-    workspaceRoot,
-    job.id,
-    ({ entry, stored }) => {
-      if (stored && isTerminalJobStatus(stored.status)) {
-        return buildAdoptedResultPatch(stored);
-      }
-      // The index entry itself may already be terminal (a completion that
-      // synced the index but left the job file stale/missing). Never rewrite
-      // a finished entry to cancelled — mirror reconcile's active-only guard.
-      if (entry && isTerminalJobStatus(entry.status)) {
-        return buildAdoptedResultPatch(entry);
-      }
-      return cancelPatch;
-    },
-    { storedFallback: { ...existing, ...job } }
-  );
+  const outcome = finalizeCancelJob(workspaceRoot, job.id, { existing, job });
 
   const finalStatus = outcome.applied ? outcome.patch.status : outcome.entry?.status ?? job.status;
   const cancelled = finalStatus === "cancelled";

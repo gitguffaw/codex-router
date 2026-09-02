@@ -16,6 +16,9 @@ export const TERMINAL_JOB_STATUSES = new Set([
   "interrupted",
   "cancelled"
 ]);
+export const SESSION_ENDED_MESSAGE = "Job failed: its Claude session ended before the job completed.";
+export const ORPHANED_JOB_MESSAGE =
+  "Job runtime exited without recording a result. Marked failed by orphan detection.";
 
 export function nowIso() {
   return new Date().toISOString();
@@ -161,6 +164,236 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
   };
 }
 
+export function buildAdoptedResultPatch(stored) {
+  return {
+    status: stored.status,
+    phase: stored.phase ?? null,
+    pid: null,
+    completedAt: stored.completedAt ?? null,
+    ...(stored.threadId ? { threadId: stored.threadId } : {}),
+    ...(stored.errorMessage ? { errorMessage: stored.errorMessage } : {})
+  };
+}
+
+export function claimJobRunning(workspaceRoot, runningRecord) {
+  return finalizeJob(
+    workspaceRoot,
+    runningRecord.id,
+    ({ entry, stored }) => {
+      // First-terminal-wins on both records. allowInsert recovers a missing
+      // index, but must not resurrect a job whose stored file is already
+      // cancelled, failed, or completed (split-brain or index loss after
+      // SessionEnd / cancel).
+      if (entry && isTerminalJobStatus(entry.status)) {
+        return null;
+      }
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return null;
+      }
+      return runningRecord;
+    },
+    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
+  );
+}
+
+export function writeJobHeartbeat(workspaceRoot, runningRecord, heartbeatAt = nowIso()) {
+  return finalizeJob(
+    workspaceRoot,
+    runningRecord.id,
+    ({ entry }) =>
+      entry &&
+      isActiveJobStatus(entry.status) &&
+      entry.pid === runningRecord.pid &&
+      entry.processStartTime === runningRecord.processStartTime
+        ? { heartbeatAt }
+        : null,
+    { storedFallback: runningRecord }
+  );
+}
+
+export function completeTrackedJob(workspaceRoot, runningRecord, execution, options = {}) {
+  const completionStatus = normalizeExecutionJobStatus(execution);
+  const completionPhase = phaseForJobStatus(completionStatus);
+  const completedAt = nowIso();
+  const job = options.job ?? runningRecord;
+  return finalizeJob(
+    workspaceRoot,
+    runningRecord.id,
+    ({ entry, stored }) => {
+      // First-terminal-wins on both records. allowInsert recovers a missing
+      // index, but must not overwrite a stored cancel, failure, or tombstone
+      // with a late owner completion.
+      if (entry && !isActiveJobStatus(entry.status)) {
+        return null;
+      }
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return null;
+      }
+      return {
+        $file: {
+          ...runningRecord,
+          status: completionStatus,
+          threadId: execution.threadId ?? null,
+          turnId: execution.turnId ?? null,
+          pid: null,
+          phase: completionPhase,
+          heartbeatAt: completedAt,
+          completedAt,
+          result: execution.payload,
+          rendered: execution.rendered,
+          warnings: execution.warnings ?? []
+        },
+        $index: {
+          status: completionStatus,
+          threadId: execution.threadId ?? null,
+          turnId: execution.turnId ?? null,
+          summary: execution.summary,
+          phase: completionPhase,
+          pid: null,
+          heartbeatAt: completedAt,
+          completedAt,
+          model: execution.model ?? job.model ?? null,
+          effort: execution.effort ?? job.effort ?? null,
+          serviceTier: execution.serviceTier ?? job.serviceTier ?? null,
+          warnings: execution.warnings ?? []
+        }
+      };
+    },
+    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
+  );
+}
+
+export function failTrackedJob(workspaceRoot, runningRecord, errorMessage, options = {}) {
+  const completedAt = nowIso();
+  return finalizeJob(
+    workspaceRoot,
+    runningRecord.id,
+    ({ entry, stored }) => {
+      // Same stored-terminal veto as completeTrackedJob: a late owner
+      // exception must not resurrect or clobber a first-terminal result.
+      if (entry && !isActiveJobStatus(entry.status)) {
+        return null;
+      }
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return null;
+      }
+      const base = stored ?? runningRecord;
+      const failurePatch = {
+        status: "failed",
+        phase: "failed",
+        errorMessage,
+        pid: null,
+        heartbeatAt: completedAt,
+        completedAt
+      };
+      return {
+        $file: {
+          ...base,
+          ...failurePatch,
+          logFile: options.logFile ?? runningRecord.logFile ?? base.logFile ?? null
+        },
+        $index: failurePatch
+      };
+    },
+    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
+  );
+}
+
+export function failQueuedLaunch(workspaceRoot, jobId, errorMessage) {
+  return finalizeJob(workspaceRoot, jobId, ({ entry, stored }) => {
+    // A late spawn 'error' must not fail a worker that already claimed
+    // running, or overwrite a first-terminal result already on disk.
+    if (!entry || entry.status !== "queued") {
+      return null;
+    }
+    if (stored && stored.status && stored.status !== "queued") {
+      return null;
+    }
+    return {
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      errorMessage,
+      completedAt: nowIso()
+    };
+  });
+}
+
+export function finalizeCancelJob(workspaceRoot, jobId, { existing = {}, job = {} } = {}) {
+  const completedAt = nowIso();
+  const cancelPatch = {
+    status: "cancelled",
+    phase: "cancelled",
+    pid: null,
+    completedAt,
+    errorMessage: "Cancelled by user.",
+    cancelledAt: completedAt
+  };
+  return finalizeJob(
+    workspaceRoot,
+    jobId,
+    ({ entry, stored }) => {
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return buildAdoptedResultPatch(stored);
+      }
+      if (entry && isTerminalJobStatus(entry.status)) {
+        return buildAdoptedResultPatch(entry);
+      }
+      return cancelPatch;
+    },
+    { storedFallback: { ...existing, ...job } }
+  );
+}
+
+export function tombstoneSessionJob(workspaceRoot, job) {
+  return finalizeJob(
+    workspaceRoot,
+    job.id,
+    ({ entry, stored }) => {
+      // Same adopt-on-stored-terminal policy as finalizeCancelJob and
+      // finalizeOrphanedJob: SessionEnd must heal a running index sitting on
+      // a cancelled or completed file, not leave the split-brain in place.
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return buildAdoptedResultPatch(stored);
+      }
+      if (!entry || isTerminalJobStatus(entry.status)) {
+        return null;
+      }
+      return {
+        status: "failed",
+        phase: "failed",
+        pid: null,
+        errorMessage: SESSION_ENDED_MESSAGE,
+        completedAt: nowIso()
+      };
+    },
+    { storedFallback: job }
+  );
+}
+
+export function finalizeOrphanedJob(workspaceRoot, job) {
+  return finalizeJob(
+    workspaceRoot,
+    job.id,
+    ({ stored }) => {
+      if (stored && isTerminalJobStatus(stored.status)) {
+        return buildAdoptedResultPatch(stored);
+      }
+      return {
+        status: "failed",
+        phase: "failed",
+        pid: null,
+        errorMessage: ORPHANED_JOB_MESSAGE,
+        completedAt: nowIso()
+      };
+    },
+    {
+      guard: ({ entry }) => entry != null && isActiveJobStatus(entry.status),
+      storedFallback: job
+    }
+  );
+}
+
 export function createProgressReporter({ stderr = false, logFile = null, onEvent = null } = {}) {
   if (!stderr && !logFile && !onEvent) {
     return null;
@@ -194,12 +427,7 @@ export async function runTrackedJob(job, runner, options = {}) {
   // Claim the job under the lock. If it was cancelled (or otherwise finalized)
   // before this runtime got going, back off without running — never resurrect a
   // terminal job to "running". allowInsert recovers a missing index entry.
-  const startOutcome = finalizeJob(
-    job.workspaceRoot,
-    job.id,
-    ({ entry }) => (entry && isTerminalJobStatus(entry.status) ? null : runningRecord),
-    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
-  );
+  const startOutcome = claimJobRunning(job.workspaceRoot, runningRecord);
   if (!startOutcome.applied) {
     return null;
   }
@@ -208,22 +436,8 @@ export async function runTrackedJob(job, runner, options = {}) {
   const heartbeatTimer =
     heartbeatIntervalMs > 0
       ? setInterval(() => {
-          const heartbeatAt = nowIso();
           try {
-            finalizeJob(
-              job.workspaceRoot,
-              job.id,
-              ({ entry }) =>
-                entry &&
-                isActiveJobStatus(entry.status) &&
-                entry.pid === runningRecord.pid &&
-                entry.processStartTime === runningRecord.processStartTime
-                  ? { heartbeatAt }
-                  : null,
-              // Reconstruct a complete running record if the job file is missing
-              // or corrupt. Do not allowInsert: a vanished index entry stays gone.
-              { storedFallback: runningRecord }
-            );
+            writeJobHeartbeat(job.workspaceRoot, runningRecord);
           } catch {
             // Heartbeats are advisory activity telemetry. Lock contention or a
             // transient state write must never terminate the actual worker.
@@ -234,88 +448,14 @@ export async function runTrackedJob(job, runner, options = {}) {
 
   try {
     const execution = await runner();
-    const completionStatus = normalizeExecutionJobStatus(execution);
-    const completionPhase = phaseForJobStatus(completionStatus);
-    const completedAt = nowIso();
-    // Commit both records under the state lock. If a cancel (or any other
-    // terminal writer) already won while this runtime was finishing, the entry
-    // is no longer active and we back off — first terminal state wins, so the
-    // owner and cancel can never split the index from the job file. The full
-    // `rendered` result goes only to the job file, never into the shared index.
-    finalizeJob(
-      job.workspaceRoot,
-      job.id,
-      ({ entry }) => {
-        // A missing entry means state lost this job mid-run; re-insert our
-        // result (allowInsert). A present terminal entry means a cancel
-        // won — back off. Only an active entry is overwritten with completion.
-        if (entry && !isActiveJobStatus(entry.status)) {
-          return null;
-        }
-        return {
-          $file: {
-            ...runningRecord,
-            status: completionStatus,
-            threadId: execution.threadId ?? null,
-            turnId: execution.turnId ?? null,
-            pid: null,
-            phase: completionPhase,
-            heartbeatAt: completedAt,
-            completedAt,
-            result: execution.payload,
-            rendered: execution.rendered,
-            warnings: execution.warnings ?? []
-          },
-          $index: {
-            status: completionStatus,
-            threadId: execution.threadId ?? null,
-            turnId: execution.turnId ?? null,
-            summary: execution.summary,
-            phase: completionPhase,
-            pid: null,
-            heartbeatAt: completedAt,
-            completedAt,
-            model: execution.model ?? job.model ?? null,
-            effort: execution.effort ?? job.effort ?? null,
-            serviceTier: execution.serviceTier ?? job.serviceTier ?? null,
-            warnings: execution.warnings ?? []
-          }
-        };
-      },
-      { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
-    );
+    completeTrackedJob(job.workspaceRoot, runningRecord, execution, { job });
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     return execution;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const completedAt = nowIso();
-    finalizeJob(
-      job.workspaceRoot,
-      job.id,
-      ({ entry, stored }) => {
-        if (entry && !isActiveJobStatus(entry.status)) {
-          return null;
-        }
-        const base = stored ?? runningRecord;
-        const failurePatch = {
-          status: "failed",
-          phase: "failed",
-          errorMessage,
-          pid: null,
-          heartbeatAt: completedAt,
-          completedAt
-        };
-        return {
-          $file: {
-            ...base,
-            ...failurePatch,
-            logFile: options.logFile ?? job.logFile ?? base.logFile ?? null
-          },
-          $index: failurePatch
-        };
-      },
-      { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
-    );
+    failTrackedJob(job.workspaceRoot, runningRecord, errorMessage, {
+      logFile: options.logFile ?? job.logFile ?? null
+    });
     throw error;
   } finally {
     if (heartbeatTimer) {

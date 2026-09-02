@@ -82,6 +82,25 @@ test("parseArgs stopAtPositional honors -- as the end of options", () => {
   assert.deepEqual(parsed.positionals, ["--background", "--help"]);
 });
 
+test("splitRawArgumentString preserves quoted empty values", () => {
+  assert.deepEqual(splitRawArgumentString('--tools "" inspect'), ["--tools", "", "inspect"]);
+  assert.deepEqual(splitRawArgumentString("--tools '' inspect"), ["--tools", "", "inspect"]);
+});
+
+test("parseArgs supports optional-value flags without consuming the only prompt", () => {
+  const bare = parseArgs(["--debug", "inspect"], {
+    optionalValueOptions: ["debug"]
+  });
+  const valued = parseArgs(["--debug", "router", "inspect"], {
+    optionalValueOptions: ["debug"]
+  });
+
+  assert.equal(bare.options.debug, true);
+  assert.deepEqual(bare.positionals, ["inspect"]);
+  assert.equal(valued.options.debug, "router");
+  assert.deepEqual(valued.positionals, ["inspect"]);
+});
+
 test("hasLeadingHelpFlag ignores --help and -h after the prompt or --", () => {
   assert.equal(hasLeadingHelpFlag(["--json", "--help"]), true);
   assert.equal(hasLeadingHelpFlag(["-h"]), true);

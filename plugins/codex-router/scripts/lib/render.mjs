@@ -153,9 +153,9 @@ function pushJobDetails(lines, job, options = {}) {
   if (!isActiveJobStatus(job.status) && options.showResultHint) {
     lines.push(`  Result: /codex-router:result ${job.id}`);
   }
-  if (!isActiveJobStatus(job.status) && job.jobClass === "task" && job.write && options.showReviewHint) {
-    lines.push("  Review changes: /codex-router:review --wait");
-    lines.push("  Stricter review: /codex-router:adversarial-review --wait");
+  if (!isActiveJobStatus(job.status) && job.write && options.showReviewHint) {
+    lines.push("  Review changes: /codex-router:review");
+    lines.push("  Stricter review: /codex-router:adversarial-review");
   }
   if (job.progressPreview?.length) {
     lines.push("  Progress:");

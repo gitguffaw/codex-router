@@ -58,13 +58,36 @@ export function isProcessAlive(pid, options = {}) {
   }
 }
 
-export function jobProcessIdentityMatches(pid, expectedStartTime, options = {}) {
-  if (!isProcessAlive(pid, options)) return false;
-  if (!expectedStartTime) return false;
+/**
+ * One process-identity verdict. Callers must not re-derive "unknown start time".
+ *
+ * - canSignal: proven live match. Required before kill. Unknown → do not signal.
+ * - treatAsLive: live, and not a proven mismatch. Unknown → assume live
+ *   (orphan scan must not fail a runner whose start time cannot be read).
+ * - looksCurrent: recorded identity is absent or matches. Missing recorded
+ *   start time → assume current (broker reuse). Unreadable current → not current.
+ */
+export function inspectProcessIdentity(pid, expectedStartTime, options = {}) {
+  const recordedStartTime = expectedStartTime || null;
+  const alive = isProcessAlive(pid, options);
   const getProcessStartTimeImpl = options.getProcessStartTimeImpl ?? getProcessStartTime;
-  const currentStartTime = getProcessStartTimeImpl(pid);
-  if (!currentStartTime) return false;
-  return currentStartTime === expectedStartTime;
+  const currentStartTime = alive && recordedStartTime ? getProcessStartTimeImpl(pid) || null : null;
+  const identityKnown = Boolean(recordedStartTime && currentStartTime);
+  const matches = identityKnown && recordedStartTime === currentStartTime;
+  return {
+    alive,
+    recordedStartTime,
+    currentStartTime,
+    identityKnown,
+    matches,
+    canSignal: Boolean(alive && matches),
+    treatAsLive: Boolean(alive && (!identityKnown || matches)),
+    looksCurrent: !recordedStartTime || Boolean(currentStartTime && matches)
+  };
+}
+
+export function jobProcessIdentityMatches(pid, expectedStartTime, options = {}) {
+  return inspectProcessIdentity(pid, expectedStartTime, options).canSignal;
 }
 
 

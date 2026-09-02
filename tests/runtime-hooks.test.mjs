@@ -7,15 +7,14 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
-import { loadBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
+import { loadBrokerSession, saveBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
 import {
-  finalizeJob,
   resolveJobFile,
   resolveStateDir,
   saveState
 } from "../plugins/codex-router/scripts/lib/state.mjs";
-import { isTerminalJobStatus } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
+import { claimJobRunning } from "../plugins/codex-router/scripts/lib/tracked-jobs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
@@ -207,12 +206,7 @@ test("session end tombstones the ending session's active jobs so surviving worke
     sessionId: "sess-current",
     pid: 99999
   };
-  const startOutcome = finalizeJob(
-    repo,
-    "review-running",
-    ({ entry }) => (entry && isTerminalJobStatus(entry.status) ? null : runningRecord),
-    { allowInsert: true, insertBase: runningRecord, storedFallback: runningRecord }
-  );
+  const startOutcome = claimJobRunning(repo, runningRecord);
   assert.equal(startOutcome.applied, false);
   const finalState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
   assert.equal(finalState.jobs.find((job) => job.id === "review-running").status, "failed");
@@ -487,6 +481,92 @@ test(
       assert.equal(job.pid, null, job.id);
       assert.match(job.errorMessage, /session ended/i);
     }
+  }
+);
+
+test(
+  "session end tears down the broker only when its process identity matches",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const repo = makeTempDir();
+    const binDir = makeTempDir();
+    const matchingStartTime = "Sat Jul 11 12:00:00 2026";
+    writeExecutable(path.join(binDir, "ps"), `#!/bin/sh\nprintf '%s\\n' '${matchingStartTime}'\n`);
+
+    const matching = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: repo,
+      detached: true,
+      stdio: "ignore"
+    });
+    const mismatched = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: repo,
+      detached: true,
+      stdio: "ignore"
+    });
+    const missing = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: repo,
+      detached: true,
+      stdio: "ignore"
+    });
+    matching.unref();
+    mismatched.unref();
+    missing.unref();
+
+    const children = [matching, mismatched, missing];
+    t.after(() => {
+      for (const child of children) {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          try {
+            process.kill(child.pid, "SIGTERM");
+          } catch {
+            // Ignore missing processes.
+          }
+        }
+      }
+    });
+
+    const hookEnv = {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`
+    };
+
+    function endSession() {
+      return run(process.execPath, [SESSION_HOOK, "SessionEnd"], {
+        cwd: repo,
+        env: hookEnv,
+        input: JSON.stringify({
+          hook_event_name: "SessionEnd",
+          session_id: "sess-broker",
+          cwd: repo
+        })
+      });
+    }
+
+    saveBrokerSession(repo, {
+      pid: mismatched.pid,
+      startTime: "Thu Jan  1 00:00:00 1970"
+    });
+    const mismatchedResult = endSession();
+    assert.equal(mismatchedResult.status, 0, mismatchedResult.stderr);
+    assert.equal(isProcessAlive(mismatched.pid), true);
+    assert.equal(loadBrokerSession(repo), null);
+
+    saveBrokerSession(repo, { pid: missing.pid });
+    const missingResult = endSession();
+    assert.equal(missingResult.status, 0, missingResult.stderr);
+    assert.equal(isProcessAlive(missing.pid), true);
+    assert.equal(loadBrokerSession(repo), null);
+
+    saveBrokerSession(repo, {
+      pid: matching.pid,
+      startTime: matchingStartTime
+    });
+    const matchingResult = endSession();
+    assert.equal(matchingResult.status, 0, matchingResult.stderr);
+    await waitFor(() => !isProcessAlive(matching.pid));
+    assert.equal(loadBrokerSession(repo), null);
   }
 );
 

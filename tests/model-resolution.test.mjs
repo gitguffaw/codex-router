@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyInheritedModelFallback,
   buildCatalogAliasMap,
   parseModelCatalog,
   resolveModelControls
@@ -343,4 +344,33 @@ test("selected models accept only advertised efforts, including none", () => {
   assert.deepEqual(accepted.configOverrides, {
     model_reasoning_effort: "none"
   });
+});
+
+test("applyInheritedModelFallback re-resolves a ChatGPT-unavailable config pin", async () => {
+  const inherited = resolveModelControls({ effort: "xhigh" }, { catalog });
+  assert.equal(inherited.resolvedFrom, "codex-config");
+
+  const skipped = await applyInheritedModelFallback(inherited, {
+    catalog,
+    loadDefaultModelStatus: async () => ({
+      supported: true,
+      configuredModel: "gpt-5.5",
+      fallbackModel: "gpt-5.5"
+    })
+  });
+  assert.equal(skipped.modelControls, inherited);
+  assert.equal(skipped.modelWarning, null);
+
+  const applied = await applyInheritedModelFallback(inherited, {
+    catalog,
+    loadDefaultModelStatus: async () => ({
+      supported: false,
+      configuredModel: "stale-pin",
+      fallbackModel: "gpt-5.5"
+    })
+  });
+  assert.equal(applied.modelControls.model, "gpt-5.5");
+  assert.equal(applied.modelControls.resolvedFrom, "fallback-catalog");
+  assert.equal(applied.modelControls.effort, "xhigh");
+  assert.match(applied.modelWarning, /stale-pin/);
 });

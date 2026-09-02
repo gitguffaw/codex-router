@@ -99,7 +99,7 @@ The watcher emits one concise terminal-status notification and leaves full outpu
 node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" result "<exact-job-id>"
 ```
 
-If the current Antigravity harness cannot surface completion from a tracked background command, use `--wait` instead of detaching silently.
+If the current Antigravity harness cannot surface completion from a tracked background command, stay in the foreground instead of detaching silently. Use companion `status <job-id> --wait` only after a job id exists.
 
 For job management:
 
@@ -109,7 +109,7 @@ node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" 
 node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" cancel
 ```
 
-`--wait` and `--background` are mutually exclusive on `task`, `analyze`, `exec`, `review`, and `adversarial-review`. `task`, `analyze`, and `exec` default to foreground when neither flag is present.
+`--wait` is only valid on `status`. `task`, `analyze`, `exec`, `review`, and `adversarial-review` default to foreground; pass `--background` to detach a tracked worker.
 
 Preserve user-supplied runtime controls and pass them through to the companion command:
 

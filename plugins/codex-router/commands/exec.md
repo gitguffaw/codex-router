@@ -1,6 +1,6 @@
 ---
 description: Run a policy-backed write-capable Codex execution job
-argument-hint: '[--wait|--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]'
+argument-hint: '[--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
@@ -18,9 +18,10 @@ Core constraints:
 - The companion runtime records the selected policy, mode, modifiers, and model controls in a context pack.
 - `--search`, `--docs`, `--tool`, and `--parallel` are Codex-side routing directives. Preserve them exactly; the companion runtime turns them into explicit inner-Codex instructions.
 - `-c`/`--config`, `--enable`, and `--disable` are Codex config controls. Preserve them exactly.
-- `--wait` and `--background` are mutually exclusive. If both are present, stop with an error and do not invoke the companion runtime.
+- Do not forward `--wait` to the companion. Foreground is the default. `--wait` is only valid on `/codex-router:status`.
+- If `$ARGUMENTS` includes `--wait`, strip it before invoking the companion.
 
-Foreground flow (the default, and whenever `--wait` is present):
+Foreground flow (the default):
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" exec "$ARGUMENTS"

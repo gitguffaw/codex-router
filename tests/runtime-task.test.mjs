@@ -126,6 +126,7 @@ test("analyze and exec keep --wait and --background inside prompt text", () => {
 
     assert.equal(result.status, 0, `${subcommand}: ${result.stderr}`);
     assert.doesNotMatch(result.stderr, /Choose either --background or --wait/);
+    assert.doesNotMatch(result.stderr, /--wait is only valid on status/);
     assert.match(
       JSON.parse(fs.readFileSync(statePath, "utf8")).lastTurnStart.prompt,
       new RegExp(prompt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
@@ -133,13 +134,13 @@ test("analyze and exec keep --wait and --background inside prompt text", () => {
   }
 });
 
-test("task --wait stays foreground and returns Codex's final output", () => {
+test("task stays foreground and returns Codex's final output", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
   initGitRepo(repo);
 
-  const result = run("node", [SCRIPT, "task", "--wait", "investigate the failing test"], {
+  const result = run("node", [SCRIPT, "task", "investigate the failing test"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
@@ -198,7 +199,7 @@ test("review accepts the quoted raw argument style for built-in base-branch revi
   run("git", ["commit", "-m", "init"], { cwd: repo });
   fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = 2;\n");
 
-  const result = run("node", [SCRIPT, "review", "--wait --base main"], {
+  const result = run("node", [SCRIPT, "review", "--base main"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
