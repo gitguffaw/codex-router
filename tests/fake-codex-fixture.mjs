@@ -152,6 +152,47 @@ function nextTurnId(state) {
   return turnId;
 }
 
+function emitStartupNoise(threadId) {
+  send({
+    method: "mcpServer/startupStatus/updated",
+    params: {
+      threadId,
+      name: "cloudflare-docs",
+      status: "failed",
+      error: "this mcp didn't connect",
+      failureReason: "reauthenticationRequired"
+    }
+  });
+  send({
+    method: "warning",
+    params: {
+      threadId,
+      message: "MCP server cloudflare-docs did not connect"
+    }
+  });
+  send({
+    method: "configWarning",
+    params: {
+      summary: "Ignored unknown config key",
+      details: "mcp_servers.example"
+    }
+  });
+  send({
+    method: "deprecationNotice",
+    params: {
+      summary: "model_instructions_file is deprecated",
+      details: null
+    }
+  });
+  send({
+    method: "warning",
+    params: {
+      threadId,
+      message: "Server linear is not connected"
+    }
+  });
+}
+
 function emitTurnCompleted(threadId, turnId, item) {
   const items = Array.isArray(item) ? item : [item];
   send({ method: "turn/started", params: { threadId, turn: buildTurn(turnId) } });
@@ -321,6 +362,11 @@ if (args[0] !== "app-server") {
   console.log("fake codex " + args.join(" "));
   process.exit(0);
 }
+if (BEHAVIOR === "startup-noise") {
+  console.error("MCP server cloudflare-docs failed to connect: not connected");
+  console.error("WARNING: proceeding, even though we could not update PATH: /usr/bin");
+  console.error("mcp startup: linear did not connect");
+}
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
 bootState.appServerArgs = args;
@@ -412,6 +458,9 @@ rl.on("line", (line) => {
         }
         const turnId = nextTurnId(state);
         send({ id: message.id, result: { turn: buildTurn(turnId), reviewThreadId: reviewThread.id } });
+        if (BEHAVIOR === "startup-noise") {
+          emitStartupNoise(reviewThread.id);
+        }
         emitTurnCompleted(reviewThread.id, turnId, [
           {
             started: { type: "enteredReviewMode", id: turnId, review: "current changes" }
@@ -452,6 +501,9 @@ rl.on("line", (line) => {
 	        };
 	        saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
+        if (BEHAVIOR === "startup-noise") {
+          emitStartupNoise(thread.id);
+        }
 
         if (BEHAVIOR === "unsupported-config-model" && message.params.model == null) {
           const error = {

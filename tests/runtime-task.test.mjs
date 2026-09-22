@@ -186,6 +186,9 @@ test("task reports the actual Codex auth error when the run is rejected", () => 
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /authentication expired; run codex login/);
+  assert.doesNotMatch(result.stderr, /Codex is ready/);
+  assert.doesNotMatch(result.stderr, /Starting Codex/);
+  assert.doesNotMatch(result.stderr, /Thread ready/);
 });
 
 test("review accepts the quoted raw argument style for built-in base-branch review", () => {
@@ -783,6 +786,50 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   assert.equal(storedJob.effort, "low");
 });
 
+test("startup noise stays out of the host response and does not warn the job", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "startup-noise");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "diagnose the startup noise"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "[codex] Codex is ready.\n");
+  assert.equal(result.stdout, "Handled the requested task.\nTask prompt accepted.\n");
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /mcp|not connected|Thread ready|Starting Codex|deprecated|PATH/i);
+
+  const stateDir = resolveStateDir(repo);
+  const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(routerState.jobs[0].status, "completed");
+  assert.deepEqual(routerState.jobs[0].warnings ?? [], []);
+  const storedJob = JSON.parse(fs.readFileSync(path.join(stateDir, "jobs", `${routerState.jobs[0].id}.json`), "utf8"));
+  assert.equal(storedJob.status, "completed");
+  assert.deepEqual(storedJob.result.warnings ?? [], []);
+
+  const status = run("node", [SCRIPT, "status", routerState.jobs[0].id], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(status.status, 0, status.stderr);
+  assert.doesNotMatch(status.stdout, /mcp|not connected|Thread ready|Starting Codex|Turn started|deprecated/i);
+
+  const review = run("node", [SCRIPT, "review"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(review.status, 0, review.stderr);
+  assert.equal(review.stderr, "[codex] Codex is ready.\n");
+  assert.match(review.stdout, /Reviewed changes against main/);
+  assert.doesNotMatch(`${review.stdout}\n${review.stderr}`, /mcp|not connected|stderr:|deprecated|PATH/i);
+});
+
 test("job lifecycle records completed-with-warnings from Codex warning notifications", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
@@ -797,7 +844,7 @@ test("job lifecycle records completed-with-warnings from Codex warning notificat
     env: buildEnv(binDir)
   });
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "[codex] Codex is ready.\n");
   const stateDir = resolveStateDir(repo);
   const routerState = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
   assert.equal(routerState.jobs[0].status, "completed-with-warnings");

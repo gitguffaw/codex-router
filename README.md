@@ -6,6 +6,12 @@ Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` comm
 
 Host adapters (Claude Code slash commands and the AGY skill) call the companion CLI at `plugins/codex-router/scripts/codex-companion.mjs`. Structured job and context-pack records are written on disk; there is no separate versioned host-facing JSON-RPC Core API beyond that companion surface and its `--json` outputs.
 
+## What's New In 2.5.1
+
+- A calling model now sees `Codex is ready.` when Codex accepts the turn, then Codex's answer. A failure that blocks Codex, such as authentication, is still returned.
+- MCP connection failures, launch details, and other non-blocking startup errors stay out of stderr, rendered results, stored warnings, and status progress.
+- See [2.5.0](./plugins/codex-router/CHANGELOG.md#250) for the shared launch path.
+
 ## What's New In 2.5.0
 
 - Analyze, exec, review, adversarial-review, and task share one launch path. Jobs persist `command` plus `runner` (`turn` | `native` | `steered`).

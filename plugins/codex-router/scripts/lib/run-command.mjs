@@ -18,6 +18,7 @@ import {
   sortJobsNewestFirst
 } from "./job-control.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./git.mjs";
+import { cleanCodexStderr, hostFailureText } from "./host-output.mjs";
 import { interpolateTemplate, loadPromptTemplate } from "./prompts.mjs";
 import {
   renderNativeReviewResult,
@@ -236,7 +237,7 @@ export async function executeSteeredReview(request) {
   });
   const parsed = parseStructuredOutput(result.finalMessage, {
     status: result.status,
-    failureMessage: result.error?.message ?? result.stderr
+    failureMessage: hostFailureText(result.error?.message) || cleanCodexStderr(result.stderr)
   });
   const payload = {
     review: reviewName,
@@ -327,7 +328,7 @@ export async function executeTurnRun(request) {
   });
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
-  const failureMessage = result.error?.message ?? result.stderr ?? "";
+  const failureMessage = hostFailureText(result.error?.message) || cleanCodexStderr(result.stderr);
   const rendered = renderTaskResult({
     rawOutput,
     failureMessage

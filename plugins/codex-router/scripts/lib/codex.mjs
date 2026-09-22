@@ -6,7 +6,7 @@
  * @typedef {import("./app-server-protocol").ThreadStartParams} ThreadStartParams
  * @typedef {import("./app-server-protocol").Turn} Turn
  * @typedef {import("./app-server-protocol").UserInput} UserInput
- * @typedef {((update: string | { message: string, phase: string | null, threadId?: string | null, turnId?: string | null, stderrMessage?: string | null, logTitle?: string | null, logBody?: string | null }) => void)} ProgressReporter
+ * @typedef {((update: string | { message: string, phase: string | null, threadId?: string | null, turnId?: string | null, stderrMessage?: string | null, hostMessage?: string | null, logTitle?: string | null, logBody?: string | null }) => void)} ProgressReporter
  * @typedef {{
  *   threadId: string,
  *   rootThreadId: string,
@@ -38,6 +38,7 @@
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
+import { cleanCodexStderr, hostFailureText, isLaunchDetail, isMcpOrConnectionNoise, isStartupDiagnostic } from "./host-output.mjs";
 import { buildCatalogAliasMap, listModelServiceTiers, readModelCatalog } from "./model-resolution.mjs";
 import { binaryAvailable } from "./process.mjs";
 
@@ -45,14 +46,6 @@ const SERVICE_NAME = "claude_code_codex_router_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
 const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
-
-function cleanCodexStderr(stderr) {
-  return stderr
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line && !line.startsWith("WARNING: proceeding, even though we could not update PATH:"))
-    .join("\n");
-}
 
 /** @returns {ThreadStartParams} */
 function buildThreadParams(cwd, options = {}) {
@@ -309,7 +302,31 @@ function warningMessageForNotification(message) {
 }
 
 function isWarningNotification(message) {
-  return ["warning", "guardianWarning", "deprecationNotice", "configWarning"].includes(message.method);
+  return ["warning", "guardianWarning", "deprecationNotice", "configWarning", "windows/worldWritableWarning"].includes(
+    message.method
+  );
+}
+
+function isDroppedStartupNotification(message) {
+  return message?.method === "mcpServer/startupStatus/updated";
+}
+
+function isIgnoredStartupWarning(warning) {
+  return !warning || isMcpOrConnectionNoise(warning) || isStartupDiagnostic(warning) || isLaunchDetail(warning);
+}
+
+function shouldApplyNotification(state, message) {
+  if (isDroppedStartupNotification(message)) {
+    return false;
+  }
+  if (message.method === "thread/started" || message.method === "thread/name/updated") {
+    return true;
+  }
+  if (isWarningNotification(message)) {
+    const warningThreadId = extractThreadId(message);
+    return !warningThreadId || state.threadIds.has(warningThreadId);
+  }
+  return belongsToTurn(state, message);
 }
 
 function normalizeCodexErrorInfo(errorInfo) {
@@ -375,6 +392,7 @@ function createTurnCaptureState(threadId, options = {}) {
     reviewText: "",
     reasoningSummary: [],
     warnings: [],
+    announcedReady: false,
     error: null,
     messages: [],
     fileChanges: [],
@@ -555,17 +573,21 @@ function applyTurnNotification(state, message) {
       if ((message.params.threadId ?? null) !== state.threadId) {
         state.activeSubagentTurns.add(message.params.threadId);
       }
-      emitProgress(
-        state.onProgress,
-        `Turn started (${message.params.turn.id}).`,
-        "starting",
-        (message.params.threadId ?? null) === state.threadId
-          ? {
-              threadId: message.params.threadId ?? null,
-              turnId: message.params.turn.id ?? null
-            }
-          : {}
-      );
+      {
+        const messageThreadId = message.params.threadId ?? null;
+        const isPrimary =
+          messageThreadId == null || messageThreadId === state.threadId || messageThreadId === state.rootThreadId;
+        const extra = {};
+        if (isPrimary) {
+          extra.threadId = messageThreadId;
+          extra.turnId = message.params.turn.id ?? null;
+          if (!state.announcedReady) {
+            extra.hostMessage = "Codex is ready.";
+            state.announcedReady = true;
+          }
+        }
+        emitProgress(state.onProgress, `Turn started (${message.params.turn.id}).`, "starting", extra);
+      }
       break;
     case "item/started":
       recordItem(state, message.params.item, "started", message.params.threadId ?? null);
@@ -581,19 +603,28 @@ function applyTurnNotification(state, message) {
         emitProgress(state.onProgress, update?.message, update?.phase ?? null);
       }
       break;
-    case "error":
+    case "error": {
       state.error = message.params.error;
-      emitProgress(state.onProgress, `Codex error: ${message.params.error.message}`, "failed");
+      const text = `Codex error: ${message.params.error?.message ?? "Codex failed."}`;
+      const hostMessage = hostFailureText(text);
+      emitProgress(state.onProgress, text, "failed", hostMessage ? { hostMessage } : {});
+      break;
+    }
+    case "configWarning":
+    case "deprecationNotice":
+    case "windows/worldWritableWarning":
       break;
     case "warning":
-    case "guardianWarning":
-    case "deprecationNotice":
-    case "configWarning": {
+    case "guardianWarning": {
       const warning = warningMessageForNotification(message);
-      if (warning) {
-        state.warnings.push(warning);
-        emitProgress(state.onProgress, `Codex warning: ${shorten(warning, 96)}`, null);
+      if (isIgnoredStartupWarning(warning)) {
+        break;
       }
+      state.warnings.push(warning);
+      emitLogEvent(state.onProgress, {
+        message: `Codex warning: ${shorten(warning, 96)}`,
+        stderrMessage: null
+      });
       break;
     }
     case "turn/completed":
@@ -624,24 +655,11 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       return;
     }
 
-    if (message.method === "thread/started" || message.method === "thread/name/updated") {
-      applyTurnNotification(state, message);
-      return;
-    }
-
-    if (isWarningNotification(message)) {
-      const warningThreadId = extractThreadId(message);
-      if (!warningThreadId || state.threadIds.has(warningThreadId)) {
-        applyTurnNotification(state, message);
-        return;
+    if (!shouldApplyNotification(state, message)) {
+      if (previousHandler && !isDroppedStartupNotification(message)) {
+        previousHandler(message);
       }
-    }
-
-    if (!belongsToTurn(state, message)) {
-        if (previousHandler) {
-          previousHandler(message);
-        }
-        return;
+      return;
     }
 
     applyTurnNotification(state, message);
@@ -655,13 +673,13 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       state.threadTurnIds.set(state.threadId, state.turnId);
     }
     for (const message of state.bufferedNotifications) {
-      if (belongsToTurn(state, message)) {
-        applyTurnNotification(state, message);
-      } else {
-        if (previousHandler) {
+      if (!shouldApplyNotification(state, message)) {
+        if (previousHandler && !isDroppedStartupNotification(message)) {
           previousHandler(message);
         }
+        continue;
       }
+      applyTurnNotification(state, message);
     }
     state.bufferedNotifications.length = 0;
 

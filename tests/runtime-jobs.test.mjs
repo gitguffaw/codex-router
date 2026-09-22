@@ -556,7 +556,9 @@ test("status shows phases, hints, and the latest finished job", () => {
   assert.match(result.stdout, /Phase: reviewing/);
   assert.match(result.stdout, /Codex session ID: thr_1/);
   assert.match(result.stdout, /Resume in Codex: codex resume thr_1/);
-  assert.match(result.stdout, /Thread ready \(thr_1\)\./);
+  assert.doesNotMatch(result.stdout, /Starting Codex Review\./);
+  assert.doesNotMatch(result.stdout, /Thread ready \(thr_1\)\./);
+  assert.doesNotMatch(result.stdout, /Turn started \(turn_1\)\./);
   assert.match(result.stdout, /Reviewer started: current changes/);
   assert.match(result.stdout, /Duration: 1m 5s/);
   assert.match(result.stdout, /Codex session ID: thr_done/);

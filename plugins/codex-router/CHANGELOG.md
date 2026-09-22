@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.5.1
+
+- Keep the output a calling model sees at startup to `Codex is ready.` or a failure that blocks Codex, such as authentication. MCP connection failures, launch details, and other non-blocking startup errors stay out of stderr, rendered results, stored warnings, and status progress.
+
 ## 2.5.0
 
 - Collapse analyze, exec, review, adversarial-review, and task onto one `launchTrackedCommand` table. Persist `command` as the job kind and `runner` (`turn` | `native` | `steered`) on the request; `jobClass` is `turn` or `native-review`.

@@ -17,5 +17,5 @@ When the helper returns Codex output:
 - For `codex-router:codex-rescue`, do not turn a failed or incomplete Codex run into a Claude-side implementation attempt. Report the failure and stop.
 - For `codex-router:codex-rescue`, if Codex was never successfully invoked, do not generate a substitute answer at all.
 - CRITICAL: After presenting review findings, STOP. Do not make any code changes. Do not fix any issues. You MUST explicitly ask the user which issues, if any, they want fixed before touching a single file. Auto-applying fixes from a review is strictly forbidden, even if the fix is obvious.
-- If the helper reports malformed output or a failed Codex run, include the most actionable stderr lines and stop there instead of guessing.
+- If the helper reports malformed output or a failed Codex run, include the blocking failure and stop there instead of guessing. Startup stderr is only `Codex is ready.` or a failure that blocks Codex, such as authentication. Do not repeat MCP connection failures, launch details, or other startup errors.
 - If the helper reports that setup or authentication is required, direct the user to `/codex-router:setup` and do not improvise alternate auth flows.

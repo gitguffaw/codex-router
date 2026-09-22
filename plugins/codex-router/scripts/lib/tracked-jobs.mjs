@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
+import { hostStderrLine } from "./host-output.mjs";
 import { getProcessStartTime } from "./process.mjs";
 import { finalizeJob, resolveJobLogFile } from "./state.mjs";
 
@@ -73,6 +74,7 @@ function normalizeProgressEvent(value) {
       threadId: typeof value.threadId === "string" && value.threadId.trim() ? value.threadId.trim() : null,
       turnId: typeof value.turnId === "string" && value.turnId.trim() ? value.turnId.trim() : null,
       stderrMessage: value.stderrMessage == null ? null : String(value.stderrMessage).trim(),
+      hostMessage: typeof value.hostMessage === "string" && value.hostMessage.trim() ? value.hostMessage.trim() : null,
       logTitle: typeof value.logTitle === "string" && value.logTitle.trim() ? value.logTitle.trim() : null,
       logBody: value.logBody == null ? null : String(value.logBody).trimEnd()
     };
@@ -84,6 +86,7 @@ function normalizeProgressEvent(value) {
     threadId: null,
     turnId: null,
     stderrMessage: String(value ?? "").trim(),
+    hostMessage: null,
     logTitle: null,
     logBody: null
   };
@@ -401,9 +404,9 @@ export function createProgressReporter({ stderr = false, logFile = null, onEvent
 
   return (eventOrMessage) => {
     const event = normalizeProgressEvent(eventOrMessage);
-    const stderrMessage = event.stderrMessage ?? event.message;
-    if (stderr && stderrMessage) {
-      process.stderr.write(`[codex] ${stderrMessage}\n`);
+    const hostMessage = hostStderrLine(event);
+    if (stderr && hostMessage) {
+      process.stderr.write(`[codex] ${hostMessage}\n`);
     }
     appendLogLine(logFile, event.message);
     appendLogBlock(logFile, event.logTitle, event.logBody);

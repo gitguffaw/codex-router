@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
+import { isHostSuppressedProgressLine } from "./host-output.mjs";
 import { inspectProcessIdentity } from "./process.mjs";
 import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
 import {
@@ -206,9 +207,11 @@ export function enrichJob(job, options = {}) {
         : null
   };
 
+  const phase = enriched.phase ?? inferLegacyJobPhase(enriched, enriched.progressPreview);
   return {
     ...enriched,
-    phase: enriched.phase ?? inferLegacyJobPhase(enriched, enriched.progressPreview)
+    phase,
+    progressPreview: enriched.progressPreview.filter((line) => !isHostSuppressedProgressLine(line))
   };
 }
 
