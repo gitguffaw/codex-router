@@ -29,7 +29,6 @@ import {
 } from "./lib/launch.mjs";
 import { binaryAvailable } from "./lib/process.mjs";
 import { executeStoredRequest } from "./lib/run-command.mjs";
-import { getConfig, setConfig } from "./lib/state.mjs";
 import { createTrackedProgress } from "./lib/detached-launch.mjs";
 import { runTrackedJob } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
@@ -50,7 +49,7 @@ const PUBLIC_COMMANDS = [
 ];
 
 const COMMAND_USAGE = {
-  setup: "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
+  setup: "  node scripts/codex-companion.mjs setup [--json]",
   models: "  node scripts/codex-companion.mjs models [--all] [--json]",
   analyze:
     "  node scripts/codex-companion.mjs analyze [--background] [--search] [--docs] [--tool <capability>] [--parallel] [--best|--spark|--model <selector>] [--service-tier <tier>|--fast] [--effort <level>] [-c|--config <key=value>] [--enable <feature>] [--disable <feature>] [prompt]",
@@ -168,8 +167,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   const codexStatus = getCodexAvailability(cwd);
   const authStatus = await getCodexAuthStatus(cwd);
   const modelStatus = await getCodexDefaultModelStatus(cwd);
-  const config = getConfig(workspaceRoot);
-
   const nextSteps = [];
   if (!codexStatus.available) {
     nextSteps.push("Install Codex with `npm install -g @openai/codex`.");
@@ -186,10 +183,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     );
     nextSteps.push("Run `/codex-router:models` to inspect the live model catalog and available effort levels.");
   }
-  if (!config.stopReviewGate) {
-    nextSteps.push("Optional: run `/codex-router:setup --enable-review-gate` to require a fresh review before stop.");
-  }
-
   return {
     ready: nodeStatus.available && codexStatus.available && authStatus.loggedIn,
     node: nodeStatus,
@@ -198,33 +191,33 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     auth: authStatus,
     model: modelStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
-    reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
     nextSteps
   };
 }
 
 async function handleSetup(argv) {
-  const { options } = parseCommandInput(argv, {
+  const normalizedArgs = normalizeArgv(argv);
+  const retiredReviewGateFlag = normalizedArgs.find(
+    (value) => value === "--enable-review-gate" || value === "--disable-review-gate"
+  );
+  if (retiredReviewGateFlag) {
+    throw new Error(
+      `${retiredReviewGateFlag} was removed with the automatic review gate. Run /codex-router:review or /codex-router:adversarial-review when you want an explicit review.`
+    );
+  }
+
+  const { options, positionals } = parseCommandInput(normalizedArgs, {
     valueOptions: ["cwd"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    booleanOptions: ["json"]
   });
 
-  if (options["enable-review-gate"] && options["disable-review-gate"]) {
-    throw new Error("Choose either --enable-review-gate or --disable-review-gate.");
+  if (positionals.length > 0) {
+    throw new Error(`Unknown setup argument: ${positionals[0]}`);
   }
 
   const cwd = resolveCommandCwd(options);
-  const workspaceRoot = resolveCommandWorkspace(options);
   const actionsTaken = [];
-
-  if (options["enable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", true);
-    actionsTaken.push(`Enabled the stop-time review gate for ${workspaceRoot}.`);
-  } else if (options["disable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", false);
-    actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
-  }
 
   const finalReport = await buildSetupReport(cwd, actionsTaken);
   outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);

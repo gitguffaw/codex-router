@@ -23,11 +23,19 @@ function nowIso() {
 function defaultState() {
   return {
     version: STATE_VERSION,
-    config: {
-      stopReviewGate: false
-    },
+    config: {},
     jobs: []
   };
+}
+
+function sanitizeConfig(config) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return {};
+  }
+  const currentConfig = { ...config };
+  delete currentConfig.stopReviewGate;
+  delete currentConfig.stopReviewGateChains;
+  return currentConfig;
 }
 
 export function resolveStateDir(cwd) {
@@ -70,10 +78,7 @@ export function loadState(cwd) {
     return {
       ...defaultState(),
       ...parsed,
-      config: {
-        ...defaultState().config,
-        ...(parsed.config ?? {})
-      },
+      config: sanitizeConfig(parsed.config),
       jobs: Array.isArray(parsed.jobs) ? parsed.jobs : []
     };
   } catch {
@@ -224,10 +229,7 @@ function saveStateLocked(cwd, state) {
   const nextJobs = [...(state.jobs ?? [])];
   const nextState = {
     version: STATE_VERSION,
-    config: {
-      ...defaultState().config,
-      ...(state.config ?? {})
-    },
+    config: sanitizeConfig(state.config),
     jobs: nextJobs
   };
 
@@ -358,19 +360,6 @@ export function finalizeJob(cwd, jobId, patchOrFn, options = {}) {
     saveStateLocked(cwd, state);
     return { applied: true, inserted: index === -1, patch: indexPatch, entry, stored };
   });
-}
-
-export function setConfig(cwd, key, value) {
-  return updateState(cwd, (state) => {
-    state.config = {
-      ...state.config,
-      [key]: value
-    };
-  });
-}
-
-export function getConfig(cwd) {
-  return loadState(cwd).config;
 }
 
 export function writeJobFile(cwd, jobId, payload) {

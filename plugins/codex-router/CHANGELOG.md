@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.5.2
+
+- Remove the automatic Stop-hook review gate, its setup controls, and its stop-time running-job notice. Manual `/codex-router:review` and `/codex-router:adversarial-review` remain available, and SessionStart/SessionEnd lifecycle hooks still manage tracked jobs. The next state write drops obsolete review-gate keys from existing state.
+
 ## 2.5.1
 
 - Keep the output a calling model sees at startup to `Codex is ready.` or a failure that blocks Codex, such as authentication. MCP connection failures, launch details, and other non-blocking startup errors stay out of stderr, rendered results, stored warnings, and status progress.

@@ -448,7 +448,7 @@ test("task-worker runs an adversarial review when jobClass is review but request
   };
   saveState(repo, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [record]
   });
   writeJobFile(repo, jobId, record);
@@ -504,7 +504,7 @@ test("status shows phases, hints, and the latest finished job", () => {
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "review-live",
@@ -553,6 +553,7 @@ test("status shows phases, hints, and the latest finished job", () => {
   assert.match(result.stdout, /Latest finished:/);
   assert.match(result.stdout, /Progress:/);
   assert.match(result.stdout, /Session runtime: direct startup/);
+  assert.doesNotMatch(result.stdout, /review gate/i);
   assert.match(result.stdout, /Phase: reviewing/);
   assert.match(result.stdout, /Codex session ID: thr_1/);
   assert.match(result.stdout, /Resume in Codex: codex resume thr_1/);
@@ -563,6 +564,15 @@ test("status shows phases, hints, and the latest finished job", () => {
   assert.match(result.stdout, /Duration: 1m 5s/);
   assert.match(result.stdout, /Codex session ID: thr_done/);
   assert.match(result.stdout, /Resume in Codex: codex resume thr_done/);
+
+  const jsonResult = run("node", [SCRIPT, "status", "--json"], {
+    cwd: workspace
+  });
+  assert.equal(jsonResult.status, 0, jsonResult.stderr);
+  const payload = JSON.parse(jsonResult.stdout);
+  assert.equal(Object.hasOwn(payload, "config"), false);
+  assert.equal(Object.hasOwn(payload, "needsReview"), false);
+  assert.doesNotMatch(jsonResult.stdout, /stopReviewGate/);
 });
 
 test("status without a job id only shows jobs from the current Claude session", () => {
@@ -581,7 +591,7 @@ test("status without a job id only shows jobs from the current Claude session", 
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "review-current",
@@ -650,7 +660,7 @@ test("status preserves adversarial review kind labels", () => {
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "review-adv-live",
@@ -720,7 +730,7 @@ function seedRunningJob(workspace, job) {
   fs.writeFileSync(path.join(jobsDir, `${job.id}.json`), `${JSON.stringify(record, null, 2)}\n`, "utf8");
   fs.writeFileSync(
     path.join(stateDir, "state.json"),
-    `${JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [record] }, null, 2)}\n`,
+    `${JSON.stringify({ version: 1, config: {}, jobs: [record] }, null, 2)}\n`,
     "utf8"
   );
 
@@ -870,7 +880,7 @@ test("owner completion backs off when a cancel wins mid-run (first terminal stat
   const jobId = "task-owner-race";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
   });
 
@@ -909,7 +919,7 @@ test("owner completion commits both records atomically when it wins the race", a
   const jobId = "task-owner-win";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
   });
 
@@ -940,7 +950,7 @@ test("active tracked jobs refresh a heartbeat without imposing a runtime deadlin
   const jobId = "task-heartbeat";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
   });
 
@@ -989,7 +999,7 @@ test("heartbeat reconstructs a missing or corrupt job file with the complete run
   const jobId = "task-heartbeat-rebuild";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
   });
 
@@ -1045,7 +1055,7 @@ test("heartbeat does not resurrect or overwrite a cancelled job", async () => {
   const jobId = "task-heartbeat-cancelled";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
   });
 
@@ -1090,7 +1100,7 @@ test("heartbeat does not reinsert a missing index entry", async () => {
   const jobId = "task-heartbeat-missing-index";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
   });
 
@@ -1106,7 +1116,7 @@ test("heartbeat does not reinsert a missing index entry", async () => {
         { timeoutMs: 1000, intervalMs: 10 }
       );
 
-      saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+      saveState(workspace, { version: 1, config: {}, jobs: [] });
       const stateFile = path.join(resolveStateDir(workspace), "state.json");
       const jobFile = resolveJobFile(workspace, jobId);
       const frozenState = fs.readFileSync(stateFile, "utf8");
@@ -1133,7 +1143,7 @@ test("owner refuses to resurrect a job cancelled before it starts", async () => 
   const jobId = "task-precancelled";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "cancelled", phase: "cancelled", title: "Codex Task" }]
   });
 
@@ -1157,13 +1167,13 @@ test("owner re-inserts its result when the index entry disappears mid-run", asyn
   const jobId = "task-missing-index";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", title: "Codex Task", jobClass: "task" }]
   });
 
   const runner = async () => {
     // Simulate unexpected state loss while the job runs.
-    saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+    saveState(workspace, { version: 1, config: {}, jobs: [] });
     return { exitStatus: 0, payload: { ok: true }, rendered: "done\n", summary: "did the work", warnings: [] };
   };
 
@@ -1180,7 +1190,7 @@ test("owner re-inserts its result when the index entry disappears mid-run", asyn
 function seedIndexedJobs(workspace, jobs) {
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs
   });
   for (const job of jobs) {
@@ -1297,7 +1307,7 @@ test("claimJobRunning does not resurrect a stored terminal record when the index
   const jobId = "task-claim-split";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", phase: "queued", title: "Codex Task", jobClass: "task" }]
   });
   fs.writeFileSync(
@@ -1324,7 +1334,7 @@ test("claimJobRunning does not resurrect a stored terminal record when the index
 test("claimJobRunning does not re-insert a missing index over a stored terminal record", () => {
   const workspace = makeTempDir();
   const jobId = "task-claim-missing";
-  saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+  saveState(workspace, { version: 1, config: {}, jobs: [] });
   fs.mkdirSync(path.dirname(resolveJobFile(workspace, jobId)), { recursive: true });
   fs.writeFileSync(
     resolveJobFile(workspace, jobId),
@@ -1428,7 +1438,7 @@ test("completeTrackedJob does not overwrite a stored terminal record", () => {
   const missingId = "task-complete-missing";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: splitId, status: "running", phase: "starting", title: "Codex Task", jobClass: "task", pid: 88 }]
   });
   fs.writeFileSync(
@@ -1552,7 +1562,7 @@ test("failTrackedJob does not overwrite a stored terminal record", () => {
   const missingId = "task-fail-missing";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: splitId, status: "running", phase: "starting", title: "Codex Task", jobClass: "task", pid: 88 }]
   });
   fs.writeFileSync(
@@ -1618,7 +1628,7 @@ test("failQueuedLaunch does not clobber a stored running record when the index i
   const jobId = "task-split-launch";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "queued", phase: "queued", title: "Codex Task", jobClass: "task" }]
   });
   fs.writeFileSync(
@@ -1898,7 +1908,7 @@ test("progress updates never resurrect or split a cancelled job", () => {
   const jobId = "task-progress-cancelled";
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: jobId, status: "cancelled", phase: "cancelled", title: "Codex Task" }]
   });
   fs.writeFileSync(
@@ -1946,7 +1956,7 @@ test("status --wait times out cleanly when a job is still active", () => {
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "task-live",
@@ -1993,7 +2003,7 @@ test("await-result nudges for every terminal status without exposing stored outp
     const jobId = `task-${status}`;
     saveState(workspace, {
       version: 1,
-      config: { stopReviewGate: false },
+      config: {},
       jobs: [
         {
           id: jobId,
@@ -2025,7 +2035,7 @@ test("await-result keeps completion nudges isolated to the originating Claude se
   const workspace = makeTempDir();
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [
       {
         id: "task-session-a",
@@ -2080,7 +2090,7 @@ test("await-result times out on a still-active job without leaking stored output
   const workspace = makeTempDir();
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [
       {
         id: "task-live",
@@ -2110,7 +2120,7 @@ test("await-result --json emits only jobId, status, and resultCommand", () => {
   const workspace = makeTempDir();
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [
       {
         id: "task-json-shape",
@@ -2142,7 +2152,7 @@ test("await-result without a Claude session id allows any job", () => {
   const workspace = makeTempDir();
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [
       {
         id: "task-agy",
@@ -2209,7 +2219,7 @@ test("await-result still finds an active job after many newer jobs are recorded"
   }));
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [
       {
         id: "task-old-running",
@@ -2245,7 +2255,7 @@ test("concurrent await-result watchers stay correlated and emit once per exact j
   ];
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: jobs.map(({ id }) => ({
       id,
       status: "running",

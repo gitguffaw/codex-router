@@ -6,6 +6,12 @@ Codex Router extends OpenAI's Codex plugin behavior with the `codex-router` comm
 
 Host adapters (Claude Code slash commands and the AGY skill) call the companion CLI at `plugins/codex-router/scripts/codex-companion.mjs`. Structured job and context-pack records are written on disk; there is no separate versioned host-facing JSON-RPC Core API beyond that companion surface and its `--json` outputs.
 
+## What's New In 2.5.2
+
+- The automatic Stop-hook review gate and its permission prompt are gone. Manual `/codex-router:review` and `/codex-router:adversarial-review` remain available.
+- Setup no longer exposes review-gate controls, and existing state drops obsolete review-gate keys on its next write.
+- SessionStart and SessionEnd lifecycle hooks continue to manage tracked jobs.
+
 ## What's New In 2.5.1
 
 - A calling model now sees `Codex is ready.` when Codex accepts the turn, then Codex's answer. A failure that blocks Codex, such as authentication, is still returned.
@@ -52,7 +58,7 @@ Use the raw Codex CLI with sol at xhigh effort to review the PR before submittin
 Do not submit until Codex reports no blocking findings.
 ```
 
-The skill deliberately does not provide Router-managed detached jobs, cross-session status/result/cancel records, orphan recovery, stop hooks, or cryptographic review receipts. Use the full `codex-router` plugin when those guarantees are required.
+The skill deliberately does not provide Router-managed detached jobs, cross-session status/result/cancel records, orphan recovery, session lifecycle hooks, or cryptographic review receipts. Use the full `codex-router` plugin when those guarantees are required.
 
 ## Which Command Should I Use?
 
@@ -74,7 +80,7 @@ Codex Router provides several entrypoints because asking a question, changing co
 | Hand Codex a problem to investigate or fix, with an easy path to resume the same task later | `/codex-router:rescue` | Only for explicit fix work | A tracked, resumable Codex task managed through the rescue subagent |
 | See which Codex models and reasoning levels are actually available on this machine | `/codex-router:models` | No | The live catalog, supported effort levels, aliases, additional service tiers, and effective default |
 | Inspect, wait for, retrieve, or stop a tracked job | `/codex-router:status`, `/codex-router:result`, or `/codex-router:cancel` | `/codex-router:cancel` only stops work | Job state, complete stored output, or cancellation of the exact active job |
-| Check whether Codex Router is installed and authenticated, or configure the optional review gate | `/codex-router:setup` | It may offer installation or configuration changes | A readiness report and guided remediation |
+| Check whether Codex Router is installed and authenticated | `/codex-router:setup` | It may offer installation | A readiness report and guided remediation |
 | Use a Codex CLI feature that Router does not expose directly | `/codex-router:cli` | Depends on the raw command | Unmodified Codex CLI stdout/stderr without Router job tracking or policy routing |
 | Use the same Router runtime from Antigravity rather than Claude Code | Antigravity `codex-router` skill | Depends on the selected Router mode | The same tracked jobs and stored results through an AGY-native skill |
 
@@ -235,12 +241,10 @@ Prefer the explicit job ID whenever more than one job may be running. `status` i
 
 ### Setup: verify that Router can run Codex
 
-Use `setup` for installation and configuration, not for repository work. It checks the local Codex binary, app-server support, authentication or custom-provider readiness, and the optional stop-time review gate. When Codex is missing and npm is available, it can offer to install it.
+Use `setup` for installation and configuration, not for repository work. It checks the local Codex binary, app-server support, and authentication or custom-provider readiness. When Codex is missing and npm is available, it can offer to install it.
 
 ```bash
 /codex-router:setup
-/codex-router:setup --enable-review-gate
-/codex-router:setup --disable-review-gate
 ```
 
 Run it when another command reports that Codex is unavailable or unauthenticated. It does not analyze the repository or create a normal tracked job.
@@ -653,7 +657,7 @@ Use it to:
 - see the latest completed job
 - confirm whether a task is still running
 
-`status <job-id> --wait` waits up to 30 minutes by default; pass `--timeout-ms <ms>` to choose a different bound. Claude Code background analyze/exec commands install a separate session-scoped watcher, so jobs that run beyond the 15-minute Stop-hook window can still notify the originating session without blocking unrelated turns.
+`status <job-id> --wait` waits up to 30 minutes by default; pass `--timeout-ms <ms>` to choose a different bound. Claude Code background analyze/exec commands install a separate session-scoped watcher so completed jobs can notify the originating session without blocking unrelated turns.
 
 ### `/codex-router:result`
 
@@ -699,20 +703,6 @@ For normal delegated work, prefer `/codex-router:analyze`, `/codex-router:exec`,
 
 Checks whether Codex is installed and authenticated.
 If Codex is missing and npm is available, it can offer to install Codex for you.
-
-You can also use `/codex-router:setup` to manage the optional review gate.
-
-#### Enabling review gate
-
-```bash
-/codex-router:setup --enable-review-gate
-/codex-router:setup --disable-review-gate
-```
-
-When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted Codex review based on Claude's response. If that review finds issues, the stop is blocked so Claude can address them first.
-
-> [!WARNING]
-> The review gate can create a long-running Claude/Codex loop and may drain usage limits quickly. Only enable it when you plan to actively monitor the session.
 
 ## Typical Flows
 
@@ -767,7 +757,7 @@ Check out the Codex docs for more [configuration options](https://developers.ope
 
 ### Moving The Work Over To Codex
 
-Delegated tasks and any [review gate](#enabling-review-gate) run can also be directly resumed inside Codex by running `codex resume` either with the specific session ID you received from running `/codex-router:result` or `/codex-router:status` or by selecting it from the list.
+Delegated tasks can also be directly resumed inside Codex by running `codex resume` either with the specific session ID you received from running `/codex-router:result` or `/codex-router:status` or by selecting it from the list.
 
 This way you can review the Codex work or continue the work there.
 

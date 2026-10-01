@@ -10,7 +10,6 @@ import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { loadBrokerSession, saveBrokerSession } from "../plugins/codex-router/scripts/lib/broker-lifecycle.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
 import {
-  resolveJobFile,
   resolveStateDir,
   saveState
 } from "../plugins/codex-router/scripts/lib/state.mjs";
@@ -19,7 +18,6 @@ import { claimJobRunning } from "../plugins/codex-router/scripts/lib/tracked-job
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-router");
 const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "codex-companion.mjs");
-const STOP_HOOK = path.join(PLUGIN_ROOT, "scripts", "stop-review-gate-hook.mjs");
 const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mjs");
 
 async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
@@ -41,29 +39,6 @@ function isProcessAlive(pid) {
   } catch (error) {
     return error?.code === "EPERM";
   }
-}
-
-function runStopHookAsync(cwd, env, input) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("node", [STOP_HOOK], {
-      cwd,
-      env,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (status, signal) => {
-      resolve({ status, signal, stdout, stderr });
-    });
-    child.stdin.end(input);
-  });
 }
 
 test("session end tombstones the ending session's active jobs so surviving workers back off", async (t) => {
@@ -115,7 +90,7 @@ test("session end tombstones the ending session's active jobs so surviving worke
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "review-completed",
@@ -212,171 +187,6 @@ test("session end tombstones the ending session's active jobs so surviving worke
   assert.equal(finalState.jobs.find((job) => job.id === "review-running").status, "failed");
 });
 
-test("stop hook runs a stop-time review task and blocks on findings when the review gate is enabled", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const fakeStatePath = path.join(binDir, "fake-codex-state.json");
-  installFakeCodex(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-  assert.equal(setup.status, 0, setup.stderr);
-  const setupPayload = JSON.parse(setup.stdout);
-  assert.equal(setupPayload.reviewGateEnabled, true);
-
-  const taskResult = run("node", [SCRIPT, "task", "--write", "fix the issue"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-  assert.equal(taskResult.status, 0, taskResult.stderr);
-
-  const blocked = run("node", [STOP_HOOK], {
-    cwd: repo,
-    env: buildEnv(binDir),
-    input: JSON.stringify({
-      cwd: repo,
-      session_id: "sess-stop-review",
-      last_assistant_message: "I completed the refactor and updated the retry logic."
-    })
-  });
-  assert.equal(blocked.status, 0, blocked.stderr);
-  const blockedPayload = JSON.parse(blocked.stdout);
-  assert.equal(blockedPayload.decision, "block");
-  assert.match(blockedPayload.reason, /Codex stop-time review found issues that still need fixes/i);
-  assert.match(blockedPayload.reason, /Missing empty-state guard/i);
-
-  const fakeState = JSON.parse(fs.readFileSync(fakeStatePath, "utf8"));
-  assert.match(fakeState.lastTurnStart.prompt, /<task>/i);
-  assert.match(fakeState.lastTurnStart.prompt, /<compact_output_contract>/i);
-  assert.match(fakeState.lastTurnStart.prompt, /Only review the work from the previous Claude turn/i);
-  assert.match(fakeState.lastTurnStart.prompt, /I completed the refactor and updated the retry logic\./);
-
-  const status = run("node", [SCRIPT, "status"], {
-    cwd: repo,
-    env: {
-      ...buildEnv(binDir),
-      CODEX_COMPANION_SESSION_ID: "sess-stop-review"
-    }
-  });
-  assert.equal(status.status, 0, status.stderr);
-  assert.match(status.stdout, /Codex Stop Gate Review/);
-});
-
-test("stop hook logs running tasks to stderr without blocking when the review gate is disabled", () => {
-  const repo = makeTempDir();
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const stateDir = resolveStateDir(repo);
-  const jobsDir = path.join(stateDir, "jobs");
-  fs.mkdirSync(jobsDir, { recursive: true });
-
-  const runningLog = path.join(jobsDir, "task-running.log");
-  fs.writeFileSync(runningLog, "running\n", "utf8");
-
-  fs.writeFileSync(
-    path.join(stateDir, "state.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        config: {
-          stopReviewGate: false
-        },
-        jobs: [
-          {
-            id: "task-live",
-            status: "running",
-            title: "Codex Task",
-            jobClass: "task",
-            sessionId: "sess-current",
-            logFile: runningLog,
-            createdAt: "2026-03-18T15:32:00.000Z",
-            updatedAt: "2026-03-18T15:33:00.000Z"
-          }
-        ]
-      },
-      null,
-      2
-    )}\n`,
-    "utf8"
-  );
-
-  const blocked = run("node", [STOP_HOOK], {
-    cwd: repo,
-    env: {
-      ...process.env,
-      CODEX_COMPANION_SESSION_ID: "sess-current"
-    },
-    input: JSON.stringify({ cwd: repo })
-  });
-
-  assert.equal(blocked.status, 0, blocked.stderr);
-  assert.equal(blocked.stdout.trim(), "");
-  assert.match(blocked.stderr, /Codex task task-live is still running/i);
-  assert.match(blocked.stderr, /\/codex-router:status/i);
-  assert.match(blocked.stderr, /\/codex-router:cancel task-live/i);
-});
-
-test("stop hook reconciles a dead running task before checking for active jobs", () => {
-  const repo = makeTempDir();
-  initGitRepo(repo);
-
-  const deadProcess = run(process.execPath, ["-e", "process.exit(0)"], { cwd: repo });
-  assert.equal(deadProcess.status, 0, deadProcess.stderr);
-
-  const stateDir = resolveStateDir(repo);
-  const logFile = path.join(stateDir, "jobs", "task-orphan.log");
-  const job = {
-    id: "task-orphan",
-    status: "running",
-    phase: "running",
-    title: "Codex Task",
-    jobClass: "task",
-    sessionId: "sess-current",
-    pid: deadProcess.pid,
-    processStartTime: "recorded-dead-process-start",
-    logFile,
-    createdAt: "2026-03-18T15:32:00.000Z",
-    updatedAt: "2026-03-18T15:33:00.000Z"
-  };
-  saveState(repo, {
-    version: 1,
-    config: { stopReviewGate: false },
-    jobs: [job]
-  });
-  fs.writeFileSync(logFile, "running\n", "utf8");
-  fs.writeFileSync(resolveJobFile(repo, job.id), `${JSON.stringify(job, null, 2)}\n`, "utf8");
-
-  const result = run(process.execPath, [STOP_HOOK], {
-    cwd: repo,
-    env: {
-      ...process.env,
-      CODEX_COMPANION_SESSION_ID: "sess-current"
-    },
-    input: JSON.stringify({ cwd: repo, session_id: "sess-current" })
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "");
-  assert.doesNotMatch(result.stderr, /still running/i);
-
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
-  assert.equal(state.jobs[0].status, "failed");
-  assert.equal(state.jobs[0].pid, null);
-  assert.match(state.jobs[0].errorMessage, /orphan detection/i);
-
-  const storedJob = JSON.parse(fs.readFileSync(resolveJobFile(repo, job.id), "utf8"));
-  assert.equal(storedJob.status, "failed");
-});
-
 test(
   "session end terminates only jobs with a proven matching process identity",
   { skip: process.platform === "win32" },
@@ -424,7 +234,7 @@ test(
 
     saveState(repo, {
       version: 1,
-      config: { stopReviewGate: false },
+      config: {},
       jobs: [
         {
           id: "task-matching",
@@ -569,86 +379,6 @@ test(
     assert.equal(loadBrokerSession(repo), null);
   }
 );
-
-test("stop hook allows the stop when the review gate is enabled and the stop-time review task is clean", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir, "adversarial-clean");
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-  assert.equal(setup.status, 0, setup.stderr);
-
-  const allowed = run("node", [STOP_HOOK], {
-    cwd: repo,
-    env: buildEnv(binDir),
-    input: JSON.stringify({ cwd: repo, session_id: "sess-stop-clean" })
-  });
-
-  assert.equal(allowed.status, 0, allowed.stderr);
-  assert.equal(allowed.stdout.trim(), "");
-});
-
-test("stop hook does not block when Codex is unavailable even if the review gate is enabled", () => {
-  const repo = makeTempDir();
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const setup = run(process.execPath, [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo
-  });
-  assert.equal(setup.status, 0, setup.stderr);
-
-  const allowed = run(process.execPath, [STOP_HOOK], {
-    cwd: repo,
-    env: {
-      ...process.env,
-      PATH: ""
-    },
-    input: JSON.stringify({ cwd: repo })
-  });
-
-  assert.equal(allowed.status, 0, allowed.stderr);
-  assert.equal(allowed.stdout.trim(), "");
-  assert.match(allowed.stderr, /Codex is not set up for the review gate/i);
-  assert.match(allowed.stderr, /Run \/codex-router:setup/i);
-});
-
-test("stop hook runs the actual task when auth status looks stale", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir, "refreshable-auth");
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-  assert.equal(setup.status, 0, setup.stderr);
-
-  const allowed = run("node", [STOP_HOOK], {
-    cwd: repo,
-    env: buildEnv(binDir),
-    input: JSON.stringify({ cwd: repo })
-  });
-
-  assert.equal(allowed.status, 0, allowed.stderr);
-  assert.doesNotMatch(allowed.stderr, /Codex is not set up for the review gate/i);
-  const payload = JSON.parse(allowed.stdout);
-  assert.equal(payload.decision, "block");
-  assert.match(payload.reason, /Missing empty-state guard/i);
-});
 
 test("commands lazily start and reuse one shared app-server after first use", async () => {
   const repo = makeTempDir();
@@ -804,138 +534,4 @@ test("setup and status honor --cwd when reading shared session runtime", () => {
   const payload = JSON.parse(setup.stdout);
   assert.equal(payload.sessionRuntime.mode, "shared");
   assert.equal(payload.sessionRuntime.endpoint, session.endpoint);
-});
-
-test("stop hook stops blocking after three consecutive blocks in one stop chain", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-  assert.equal(setup.status, 0, setup.stderr);
-
-  const hookInput = (stopHookActive) =>
-    JSON.stringify({
-      cwd: repo,
-      session_id: "sess-stop-cap",
-      stop_hook_active: stopHookActive,
-      last_assistant_message: "I completed the refactor and updated the retry logic."
-    });
-
-  // First stop attempt of the chain (stop_hook_active absent) blocks.
-  const first = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(false) });
-  assert.equal(first.status, 0, first.stderr);
-  assert.equal(JSON.parse(first.stdout).decision, "block");
-
-  // Second and third attempts (continuing due to the stop hook) still block.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const blocked = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(true) });
-    assert.equal(blocked.status, 0, blocked.stderr);
-    assert.equal(JSON.parse(blocked.stdout).decision, "block");
-  }
-
-  // Fourth attempt hits the cap: the stop is allowed and the unresolved
-  // findings are downgraded to a stderr note.
-  const capped = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(true) });
-  assert.equal(capped.status, 0, capped.stderr);
-  assert.equal(capped.stdout.trim(), "");
-  assert.match(capped.stderr, /reached its cap of 3 consecutive blocks/i);
-  assert.match(capped.stderr, /Codex stop-time review found issues/i);
-
-  // A fresh stop chain (stop_hook_active absent) starts blocking again.
-  const fresh = run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(false) });
-  assert.equal(fresh.status, 0, fresh.stderr);
-  assert.equal(JSON.parse(fresh.stdout).decision, "block");
-});
-
-test("stop hook tracks block chains per session so concurrent sessions do not reset each other", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-  assert.equal(setup.status, 0, setup.stderr);
-
-  const hookInput = (sessionId, stopHookActive) =>
-    JSON.stringify({
-      cwd: repo,
-      session_id: sessionId,
-      stop_hook_active: stopHookActive,
-      last_assistant_message: "I completed the refactor."
-    });
-
-  const runHook = (sessionId, stopHookActive) =>
-    run("node", [STOP_HOOK], { cwd: repo, env: buildEnv(binDir), input: hookInput(sessionId, stopHookActive) });
-
-  // Session A blocks three times; session B's interleaved blocks must not
-  // reset A's chain.
-  assert.equal(JSON.parse(runHook("sess-a", false).stdout).decision, "block");
-  assert.equal(JSON.parse(runHook("sess-b", false).stdout).decision, "block");
-  assert.equal(JSON.parse(runHook("sess-a", true).stdout).decision, "block");
-  assert.equal(JSON.parse(runHook("sess-b", true).stdout).decision, "block");
-  assert.equal(JSON.parse(runHook("sess-a", true).stdout).decision, "block");
-
-  // Session A's fourth attempt hits its own cap despite B's interleaving.
-  const cappedA = runHook("sess-a", true);
-  assert.equal(cappedA.stdout.trim(), "");
-  assert.match(cappedA.stderr, /reached its cap of 3 consecutive blocks/i);
-
-  // Session B is unaffected by A's cap: it has blocked twice, so it blocks
-  // once more before hitting its own cap.
-  assert.equal(JSON.parse(runHook("sess-b", true).stdout).decision, "block");
-  const cappedB = runHook("sess-b", true);
-  assert.equal(cappedB.stdout.trim(), "");
-  assert.match(cappedB.stderr, /reached its cap of 3 consecutive blocks/i);
-});
-
-test("stop hook preserves concurrent per-session chain updates after delayed reviews", async () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir, "slow-task");
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const env = buildEnv(binDir);
-  const setup = run("node", [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo,
-    env
-  });
-  assert.equal(setup.status, 0, setup.stderr);
-
-  const hookInput = (sessionId) =>
-    JSON.stringify({
-      cwd: repo,
-      session_id: sessionId,
-      last_assistant_message: `I completed the refactor for ${sessionId}.`
-    });
-
-  const [first, second] = await Promise.all([
-    runStopHookAsync(repo, env, hookInput("sess-a")),
-    runStopHookAsync(repo, env, hookInput("sess-b"))
-  ]);
-
-  for (const result of [first, second]) {
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).decision, "block");
-  }
-
-  const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
-  assert.equal(state.config.stopReviewGateChains["sess-a"].blocks, 1);
-  assert.equal(state.config.stopReviewGateChains["sess-b"].blocks, 1);
 });

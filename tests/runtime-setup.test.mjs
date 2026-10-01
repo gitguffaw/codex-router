@@ -38,8 +38,37 @@ test("setup reports ready when fake codex is installed and authenticated", () =>
   assert.equal(result.status, 0);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ready, true);
+  assert.equal(Object.hasOwn(payload, "reviewGateEnabled"), false);
   assert.match(payload.codex.detail, /advanced runtime available/);
   assert.equal(payload.sessionRuntime.mode, loadBrokerSession(workspace) ? "shared" : "direct");
+});
+
+test("setup rejects the removed automatic review gate controls with manual-review guidance", () => {
+  const workspace = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+
+  for (const args of [
+    ["--enable-review-gate", "--json"],
+    ["--disable-review-gate", "--json"],
+    ["--json", "--enable-review-gate"]
+  ]) {
+    const result = run("node", [SCRIPT, "setup", ...args], {
+      cwd: workspace,
+      env: buildEnv(binDir)
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /was removed with the automatic review gate/);
+    assert.match(result.stderr, /\/codex-router:review/);
+  }
+
+  const unknown = run("node", [SCRIPT, "setup", "unexpected"], {
+    cwd: workspace,
+    env: buildEnv(binDir)
+  });
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /Unknown setup argument: unexpected/);
 });
 
 test("setup is ready without npm when Codex is already installed and authenticated", () => {

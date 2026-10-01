@@ -509,7 +509,7 @@ test("task-resume-candidate returns the latest rescue thread from the current se
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "task-current",
@@ -625,7 +625,7 @@ test("task --resume-last ignores running tasks from other Claude sessions", () =
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "task-other-running",

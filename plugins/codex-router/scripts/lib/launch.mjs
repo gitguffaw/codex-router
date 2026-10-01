@@ -379,6 +379,7 @@ function buildTurnLaunch(spec, { options, positionals, cwd, workspaceRoot, model
     summary: taskMetadata.summary,
     workspaceRoot,
     write,
+    contextPack: null,
     model: modelControls.model,
     effort: modelControls.effort,
     serviceTier: null

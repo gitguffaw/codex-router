@@ -42,6 +42,7 @@ test("Antigravity bundle exposes codex-router skill metadata", () => {
   assert.match(skill, /translate Claude Code-specific follow-up commands into AGY-safe equivalents/i);
   assert.match(skill, /translate `!codex login` to `codex login`/i);
   assert.match(skill, /codex login --device-auth/);
+  assert.doesNotMatch(skill, /enable-review-gate|disable-review-gate|stop-time review gate/i);
   assert.match(skill, /Do not turn a failed or incomplete Codex run into an Antigravity-side implementation attempt/i);
 });
 

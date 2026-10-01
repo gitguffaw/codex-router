@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { getSessionRuntimeStatus } from "./codex.mjs";
 import { isHostSuppressedProgressLine } from "./host-output.mjs";
 import { inspectProcessIdentity } from "./process.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { listJobs, readJobFile, resolveJobFile } from "./state.mjs";
 import {
   appendLogLine,
   buildAdoptedResultPatch,
@@ -298,7 +298,6 @@ function matchJobReference(jobs, reference, predicate = () => true) {
 
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const config = getConfig(workspaceRoot);
   const jobs = sortJobsNewestFirst(
     filterJobsForCurrentSession(reconcileOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options), options)
   );
@@ -318,12 +317,10 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
   return {
     workspaceRoot,
-    config,
     sessionRuntime: getSessionRuntimeStatus(options.env, workspaceRoot),
     running,
     latestFinished,
-    recent,
-    needsReview: Boolean(config.stopReviewGate)
+    recent
   };
 }
 
