@@ -45,7 +45,7 @@ export function failWorkerLaunch(job, logFile, error) {
   return message;
 }
 
-export function enqueueBackgroundTask({ cwd, job, request, scriptPath, workerNode }) {
+export function enqueueBackgroundTask({ cwd, job, request, scriptPath, workerNode = undefined }) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 

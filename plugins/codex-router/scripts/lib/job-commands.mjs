@@ -27,7 +27,7 @@ import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 // Long-running Codex jobs routinely exceed the old four-minute default. Keep
 // an explicit timeout so an abandoned waiter eventually exits, but make the
-// default comfortably longer than Claude Code's 15-minute Stop-hook window.
+// default gives long-running foreground waits enough time to complete.
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_AWAIT_RESULT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;

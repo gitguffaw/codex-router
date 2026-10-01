@@ -189,7 +189,6 @@ export function renderSetupReport(report) {
     `- auth: ${report.auth.detail}`,
     `- model: ${report.model.detail}`,
     `- session runtime: ${report.sessionRuntime.label}`,
-    `- review gate: ${report.reviewGateEnabled ? "enabled" : "disabled"}`,
     ""
   ];
 
@@ -430,7 +429,6 @@ export function renderStatusReport(report) {
     "# Codex Status",
     "",
     `Session runtime: ${report.sessionRuntime.label}`,
-    `Review gate: ${report.config.stopReviewGate ? "enabled" : "disabled"}`,
     ""
   ];
 
@@ -467,11 +465,6 @@ export function renderStatusReport(report) {
     lines.push("");
   } else if (report.running.length === 0 && !report.latestFinished) {
     lines.push("No jobs recorded yet.", "");
-  }
-
-  if (report.needsReview) {
-    lines.push("The stop-time review gate is enabled.");
-    lines.push("Ending the session will trigger a fresh Codex adversarial review and block if it finds issues.");
   }
 
   return `${lines.join("\n").trimEnd()}\n`;

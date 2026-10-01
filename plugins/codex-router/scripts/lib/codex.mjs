@@ -28,6 +28,7 @@
  *   reviewText: string,
  *   reasoningSummary: string[],
  *   warnings: string[],
+ *   announcedReady: boolean,
  *   error: unknown,
  *   messages: Array<{ lifecycle: string, phase: string | null, text: string }>,
  *   fileChanges: ThreadItem[],

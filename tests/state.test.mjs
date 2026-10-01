@@ -8,6 +8,7 @@ import { makeTempDir, run, writeExecutable } from "./helpers.mjs";
 import { getProcessStartTime } from "../plugins/codex-router/scripts/lib/process.mjs";
 import {
   finalizeJob,
+  loadState,
   resolveJobFile,
   resolveJobLogFile,
   resolveStateDir,
@@ -52,6 +53,47 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
   }
 });
 
+test("loadState drops obsolete automatic review gate configuration", () => {
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(
+    stateFile,
+    `${JSON.stringify({
+      version: 1,
+      config: {
+        stopReviewGate: true,
+        stopReviewGateChains: { session: { blocks: 2 } },
+        retainedSetting: "keep"
+      },
+      jobs: []
+    })}\n`,
+    "utf8"
+  );
+
+  const loaded = loadState(workspace);
+  assert.deepEqual(loaded.config, { retainedSetting: "keep" });
+
+  saveState(workspace, {
+    ...loaded,
+    config: {
+      ...loaded.config,
+      stopReviewGate: true,
+      stopReviewGateChains: { restored: { blocks: 1 } }
+    }
+  });
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")).config, { retainedSetting: "keep" });
+});
+
+test("loadState normalizes malformed config values", () => {
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, `${JSON.stringify({ version: 1, config: [], jobs: [] })}\n`, "utf8");
+
+  assert.deepEqual(loadState(workspace).config, {});
+});
+
 test("saveState retains every indexed job and artifact without a count cap", () => {
   const workspace = makeTempDir();
   const stateFile = resolveStateFile(workspace);
@@ -78,7 +120,7 @@ test("saveState retains every indexed job and artifact without a count cap", () 
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs
       },
       null,
@@ -89,7 +131,7 @@ test("saveState retains every indexed job and artifact without a count cap", () 
 
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs
   });
 
@@ -151,7 +193,7 @@ test("finalizeJob retains a completed result while many other jobs remain active
 
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs
   });
 
@@ -182,7 +224,7 @@ test("saveState does not reclaim a fresh half-written (empty) state lock", () =>
   fs.writeFileSync(lockFile, "", "utf8");
 
   assert.throws(
-    () => saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] }),
+    () => saveState(workspace, { version: 1, config: {}, jobs: [] }),
     /Timed out waiting for the Codex Router state lock/
   );
   assert.equal(fs.existsSync(lockFile), true);
@@ -198,7 +240,7 @@ test("saveState waits while a live process holds the state lock", () => {
   writeLockFile(lockFile, holder);
 
   assert.throws(
-    () => saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] }),
+    () => saveState(workspace, { version: 1, config: {}, jobs: [] }),
     /Timed out waiting for the Codex Router state lock/
   );
   assert.equal(fs.readFileSync(lockFile, "utf8").trim(), JSON.stringify(holder));
@@ -213,7 +255,7 @@ test("saveState reclaims a state lock held by a dead process", () => {
   const exited = run("node", ["-e", "process.exit(0)"]);
   writeLockFile(lockFile, { pid: exited.pid, startTime: null, nonce: "dead-holder" });
 
-  const saved = saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+  const saved = saveState(workspace, { version: 1, config: {}, jobs: [] });
   assert.equal(saved.jobs.length, 0);
   assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
   assert.equal(fs.existsSync(lockFile), false);
@@ -228,7 +270,7 @@ test("saveState reclaims a malformed state lock once it ages past the stale thre
   const past = new Date(Date.now() - 60000);
   fs.utimesSync(lockFile, past, past);
 
-  const saved = saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+  const saved = saveState(workspace, { version: 1, config: {}, jobs: [] });
   assert.equal(saved.jobs.length, 0);
   assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
 });
@@ -248,7 +290,7 @@ test("saveState immediately reclaims a lock whose live PID has a different start
   const previousPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
   try {
-    const saved = saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+    const saved = saveState(workspace, { version: 1, config: {}, jobs: [] });
     assert.equal(saved.jobs.length, 0);
     assert.equal(fs.existsSync(resolveStateFile(workspace)), true);
   } finally {
@@ -271,7 +313,7 @@ test("saveState never steals an aged lock whose holder is alive with a matching 
   fs.utimesSync(lockFile, past, past);
 
   assert.throws(
-    () => saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] }),
+    () => saveState(workspace, { version: 1, config: {}, jobs: [] }),
     /Timed out waiting for the Codex Router state lock/
   );
   assert.equal(fs.readFileSync(lockFile, "utf8").trim(), JSON.stringify(holder));
@@ -289,7 +331,7 @@ test("saveState never steals an aged lock with a live PID when identity is unver
   fs.utimesSync(lockFile, past, past);
 
   assert.throws(
-    () => saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] }),
+    () => saveState(workspace, { version: 1, config: {}, jobs: [] }),
     /Timed out waiting for the Codex Router state lock/
   );
   assert.equal(fs.readFileSync(lockFile, "utf8").trim(), JSON.stringify(holder));
@@ -305,7 +347,7 @@ function seedFinalizeFixture(workspace, { entryStatus = "running", storedStatus 
     title: "Codex Task",
     updatedAt: "2026-03-18T15:30:00.000Z"
   };
-  saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [entry] });
+  saveState(workspace, { version: 1, config: {}, jobs: [entry] });
   const jobFile = resolveJobFile(workspace, "task-final");
   fs.writeFileSync(jobFile, JSON.stringify({ id: "task-final", status: storedStatus, rendered: "partial\n" }, null, 2), "utf8");
   return { stateFile, jobFile };
@@ -356,7 +398,7 @@ test("finalizeJob seeds the job file from storedFallback when none exists", asyn
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: "task-nofile", status: "running", title: "Codex Task" }]
   });
 
@@ -378,7 +420,7 @@ test("finalizeJob refuses to write when the index entry is gone", async () => {
   const workspace = makeTempDir();
   const stateFile = resolveStateFile(workspace);
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] });
+  saveState(workspace, { version: 1, config: {}, jobs: [] });
 
   const outcome = finalizeJob(
     workspace,
@@ -400,7 +442,7 @@ test("finalizeJob writes distinct $index and $file payloads", async () => {
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: "task-split", status: "running", title: "Codex Task" }]
   });
   fs.writeFileSync(resolveJobFile(workspace, "task-split"), JSON.stringify({ id: "task-split", status: "running" }, null, 2), "utf8");
@@ -427,7 +469,7 @@ test("finalizeJob vetoes when the decision returns null", async () => {
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
+    config: {},
     jobs: [{ id: "task-veto", status: "cancelled", title: "Codex Task" }]
   });
 

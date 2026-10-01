@@ -58,7 +58,7 @@ test("result returns the stored output for the latest finished job by default", 
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "review-finished",
@@ -140,7 +140,7 @@ test("result without a job id prefers the latest finished job from the current C
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "review-current",
@@ -260,7 +260,7 @@ test("cancel stops an active background job and marks it cancelled", async (t) =
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "task-live",
@@ -343,7 +343,7 @@ test("cancel keeps a completed result when the runtime finished before the cance
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "task-raced",
@@ -396,7 +396,7 @@ test("cancel without a job id ignores active jobs from other Claude sessions", (
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "task-other",
@@ -451,7 +451,7 @@ test("cancel with a job id can still target an active job from another Claude se
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
+        config: {},
         jobs: [
           {
             id: "task-other",

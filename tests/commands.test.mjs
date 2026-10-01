@@ -321,11 +321,11 @@ test("internal docs use task terminology for rescue runs", () => {
   assert.match(promptRecipes, /## Narrow Fix/);
 });
 
-test("hooks keep session-end cleanup and stop gating enabled", () => {
+test("hooks keep session lifecycle handling enabled without automatic review", () => {
   const source = read("hooks/hooks.json");
   assert.match(source, /SessionStart/);
   assert.match(source, /SessionEnd/);
-  assert.match(source, /stop-review-gate-hook\.mjs/);
+  assert.doesNotMatch(source, /"Stop"|stop-review-gate-hook\.mjs/);
   assert.match(source, /session-lifecycle-hook\.mjs/);
 });
 
@@ -333,11 +333,11 @@ test("setup command can offer Codex install and still points users to codex logi
   const setup = read("commands/setup.md");
   const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 
-  assert.match(setup, /argument-hint:\s*'\[--enable-review-gate\|--disable-review-gate\]'/);
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);
   assert.match(setup, /codex-companion\.mjs" setup --json \$ARGUMENTS/);
   assert.match(setup, /stale or unsupported.*\/codex-router:models/i);
+  assert.doesNotMatch(setup, /enable-review-gate|disable-review-gate|stop-time review gate/i);
   assert.match(readme, /!codex login/);
   assert.match(readme, /install or upgrade Codex for you/i);
   assert.match(readme, /!codex login --device-auth/);
@@ -346,6 +346,5 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(readme, new RegExp(`## What's New In ${expectedVersion.replace(/\./g, "\\.")}`));
   assert.match(readme, /One host surface, depending on how you want to use Codex Router/i);
   assert.match(readme, /If you are upgrading an existing Claude Code install/i);
-  assert.match(readme, /\/codex-router:setup --enable-review-gate/);
-  assert.match(readme, /\/codex-router:setup --disable-review-gate/);
+  assert.doesNotMatch(readme, /enable-review-gate|disable-review-gate|stop-time review gate/i);
 });

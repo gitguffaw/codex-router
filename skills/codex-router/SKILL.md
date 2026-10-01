@@ -131,7 +131,6 @@ Return Codex Router output as-is when it is a review, result, status table, or m
 For setup reports or setup/auth failure messages, preserve the substance of the output but translate Claude Code-specific follow-up commands into AGY-safe equivalents before showing them to the user. In particular:
 
 - translate `/codex-router:models` to `node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" models`
-- translate `/codex-router:setup --enable-review-gate` and `/codex-router:setup --disable-review-gate` to the matching `node "<codex-router-checkout>/plugins/codex-router/scripts/codex-companion.mjs" setup ...` commands
 - translate `/codex-router:status` and `/codex-router:result` to the matching companion `status` and `result` commands
 - translate `!codex login` to `codex login`
 - preserve any `codex login --device-auth` or `codex login --with-api-key` guidance when browser login is blocked
