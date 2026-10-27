@@ -723,7 +723,6 @@ async function withAppServer(cwd, fn, options = {}) {
 
     if (client) {
       await client.close().catch(() => {});
-      client = null;
     }
 
     if (!shouldRetryDirect) {
@@ -1058,8 +1057,8 @@ export async function getCodexDefaultModelStatus(cwd, options = {}) {
   }
 
   let client = null;
-  let authStatus = buildAuthStatus();
-  let configResponse = null;
+  let authStatus;
+  let configResponse;
   try {
     client = await CodexAppServerClient.connect(cwd, {
       env: options.env,
@@ -1083,7 +1082,7 @@ export async function getCodexDefaultModelStatus(cwd, options = {}) {
   }
 
   const configuredModel = configuredModelFromConfig(configResponse);
-  let catalog = [];
+  let catalog;
   try {
     catalog = readModelCatalog(cwd, { env: options.env });
   } catch (error) {
