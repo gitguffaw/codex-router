@@ -72,7 +72,7 @@ export function enqueueBackgroundTask({ cwd, job, request, scriptPath, workerNod
   try {
     child = spawnDetachedTaskWorker({ cwd, jobId: job.id, scriptPath, workerNode });
   } catch (error) {
-    throw new Error(failWorkerLaunch(job, logFile, error));
+    throw new Error(failWorkerLaunch(job, logFile, error), { cause: error });
   }
 
   child.on("error", (error) => {
