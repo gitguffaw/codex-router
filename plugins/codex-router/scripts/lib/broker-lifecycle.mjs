@@ -98,10 +98,10 @@ export async function sendBrokerShutdown(endpoint) {
     });
     socket.on("data", () => {
       socket.end();
-      resolve();
+      resolve(undefined);
     });
-    socket.on("error", resolve);
-    socket.on("close", resolve);
+    socket.on("error", () => resolve(undefined));
+    socket.on("close", () => resolve(undefined));
   });
 }
 

@@ -274,6 +274,11 @@ export function readStoredJob(workspaceRoot, jobId) {
   return readJobFile(jobFile);
 }
 
+/**
+ * @param {any[]} jobs
+ * @param {string | null | undefined} reference
+ * @param {(job: any) => boolean} [predicate]
+ */
 function matchJobReference(jobs, reference, predicate = () => true) {
   const filtered = jobs.filter(predicate);
   if (!reference) {
