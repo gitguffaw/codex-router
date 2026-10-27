@@ -30,7 +30,7 @@
     "bump-version": "node scripts/bump-version.mjs",
     "check-version": "node scripts/bump-version.mjs --check",
     "prebuild": "mkdir -p plugins/codex-router/.generated/app-server-types && codex app-server generate-ts --out plugins/codex-router/.generated/app-server-types",
-    "build": "tsc -p tsconfig.app-server.json",
+    "build": "node ./node_modules/typescript/lib/tsc.js -p tsconfig.app-server.json",
     "lint": "eslint .",
     "test": "node --test tests/*.test.mjs"
   },
