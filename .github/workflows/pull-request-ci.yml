@@ -37,7 +37,7 @@ jobs:
       - name: Install Codex CLI
         # Pinned: prebuild regenerates types from this CLI, so an unpinned
         # install can break the build on upstream releases. Bump deliberately.
-        run: npm install -g @openai/codex@0.142.5
+        run: npm install -g @openai/codex@0.160.0
 
       - name: Run lint
         run: npm run lint
