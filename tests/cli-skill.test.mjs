@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -9,8 +10,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex-cli");
 const SKILL_FILE = path.join(PLUGIN_ROOT, "skills", "codex-cli", "SKILL.md");
 
+// Finder recreates this gitignored file in any directory it opens. It is not a
+// plugin surface. Every other name, including other dotfiles, stays visible.
+function isFinderMetadata(name) {
+  return name === ".DS_Store";
+}
+
 function listFiles(root, current = root) {
   return fs.readdirSync(current, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory() && isFinderMetadata(entry.name)) {
+      return [];
+    }
     const absolute = path.join(current, entry.name);
     return entry.isDirectory() ? listFiles(root, absolute) : [path.relative(root, absolute)];
   });
@@ -41,6 +51,31 @@ test("minimal Codex CLI plugin contains one skill and no runtime surfaces", () =
   assert.match(skill, /-s workspace-write -a never/);
   assert.match(skill, /review the PR before submitting/i);
   assert.doesNotMatch(skill, /codex-companion|app-server-broker|session-lifecycle-hook/);
+});
+
+test("plugin file listing ignores Finder metadata but still reports real files", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-cli-listing-"));
+  try {
+    fs.mkdirSync(path.join(root, "commands"));
+    fs.mkdirSync(path.join(root, "hooks"));
+    fs.mkdirSync(path.join(root, "scripts"));
+    fs.writeFileSync(path.join(root, ".DS_Store"), "");
+    fs.writeFileSync(path.join(root, "commands", ".DS_Store"), "");
+    fs.writeFileSync(path.join(root, "hooks", ".DS_Store"), "");
+    fs.writeFileSync(path.join(root, "commands", "extra.md"), "real");
+    fs.writeFileSync(path.join(root, "hooks", "session.mjs"), "real");
+    fs.writeFileSync(path.join(root, "hooks", ".keep"), "real");
+    fs.writeFileSync(path.join(root, "scripts", "runtime.mjs"), "real");
+
+    assert.deepEqual(listFiles(root).sort(), [
+      "commands/extra.md",
+      "hooks/.keep",
+      "hooks/session.mjs",
+      "scripts/runtime.mjs"
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("marketplace publishes the minimal Codex CLI plugin beside Codex Router", () => {

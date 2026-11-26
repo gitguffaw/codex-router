@@ -82,7 +82,10 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
 });
 
 test("continue is not exposed as a user-facing command", () => {
-  const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).sort();
+  // Finder metadata is not a command. Any other name still fails the list below.
+  const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands"))
+    .filter((name) => name !== ".DS_Store")
+    .sort();
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "analyze.md",
