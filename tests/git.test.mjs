@@ -69,6 +69,30 @@ test("resolveReviewTarget requires an explicit base when no default branch can b
   );
 });
 
+test("collectReviewContext reports an unrelated history instead of a raw merge-base exit", () => {
+  const cwd = makeTempDir();
+  initGitRepo(cwd);
+  fs.writeFileSync(path.join(cwd, "app.js"), "console.log('v1');\n");
+  run("git", ["add", "app.js"], { cwd });
+  run("git", ["commit", "-m", "init"], { cwd });
+  run("git", ["checkout", "--orphan", "unrelated"], { cwd });
+  fs.writeFileSync(path.join(cwd, "other.js"), "console.log('v2');\n");
+  run("git", ["add", "other.js"], { cwd });
+  run("git", ["commit", "-m", "orphan"], { cwd });
+
+  assert.throws(
+    () => collectReviewContext(cwd, resolveReviewTarget(cwd, {})),
+    /No merge base between HEAD and main\. Pass --base <ref> or use --scope working-tree\./
+  );
+  assert.throws(
+    () => collectReviewContext(cwd, resolveReviewTarget(cwd, { base: "nope" })),
+    /Not a valid object name nope/
+  );
+
+  const workingTree = collectReviewContext(cwd, resolveReviewTarget(cwd, { scope: "working-tree" }));
+  assert.equal(workingTree.mode, "working-tree");
+});
+
 test("collectReviewContext keeps inline diffs for tiny adversarial reviews", () => {
   const cwd = makeTempDir();
   initGitRepo(cwd);

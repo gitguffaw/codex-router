@@ -66,7 +66,21 @@ function measureCombinedGitOutputBytes(cwd, argSets, maxBytes) {
 }
 
 function buildBranchComparison(cwd, baseRef) {
-  const mergeBase = gitChecked(cwd, ["merge-base", "HEAD", baseRef]).stdout.trim();
+  const result = git(cwd, ["merge-base", "HEAD", baseRef]);
+  if (result.error) {
+    throw result.error;
+  }
+  // merge-base exits 1 with empty output when the histories share no ancestor.
+  // Any other failure, including an unknown base ref, keeps the git diagnostic.
+  if (result.status === 1) {
+    throw new Error(
+      `No merge base between HEAD and ${baseRef}. Pass --base <ref> or use --scope working-tree.`
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(formatCommandFailure(result));
+  }
+  const mergeBase = result.stdout.trim();
   return {
     mergeBase,
     commitRange: `${mergeBase}..HEAD`,
