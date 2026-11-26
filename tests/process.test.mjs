@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  binaryAvailable,
   getProcessStartTime,
   inspectProcessIdentity,
   isProcessAlive,
   jobProcessIdentityMatches,
+  runCommand,
+  runCommandChecked,
   terminateProcessIfIdentityMatches,
   terminateProcessTree,
   terminateWithEscalation
@@ -366,4 +369,22 @@ test("terminateWithEscalation skips SIGKILL when the leader exited before escala
   assert.equal(outcome.escalated, undefined);
   assert.equal(outcome.escalationSkipped, "unverified-process-identity");
   assert.deepEqual(signals, [[-1234, "SIGTERM"]]);
+});
+
+test("runCommand keeps a normal exit status and does not treat a signal death as success", () => {
+  const success = runCommand(process.execPath, ["-e", "process.exit(0)"]);
+  assert.equal(success.status, 0);
+  assert.equal(success.signal, null);
+
+  const killed = runCommand(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"]);
+  assert.equal(killed.signal, "SIGTERM");
+  assert.equal(killed.status, null);
+  assert.throws(
+    () => runCommandChecked(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"]),
+    /signal=SIGTERM/
+  );
+
+  const availability = binaryAvailable(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"]);
+  assert.equal(availability.available, false);
+  assert.match(availability.detail, /SIGTERM/);
 });
