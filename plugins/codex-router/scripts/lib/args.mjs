@@ -69,6 +69,38 @@ export function parseArgs(argv, config = {}) {
     }
   }
 
+  function optionKey(token) {
+    if (token === "--") {
+      return "--";
+    }
+    if (!token || token === "-" || !String(token).startsWith("-")) {
+      return null;
+    }
+    if (String(token).startsWith("--")) {
+      const body = token.slice(2);
+      const equalsIndex = body.indexOf("=");
+      const rawKey = equalsIndex === -1 ? body : body.slice(0, equalsIndex);
+      return aliasMap[rawKey] ?? rawKey;
+    }
+    const rawKey = token.slice(1);
+    return aliasMap[rawKey] ?? rawKey;
+  }
+
+  // `--` ends options, and a following known option is that option, not a
+  // value. Unknown dashed tokens stay values so prompt text such as
+  // `--future-flag` can still be passed explicitly. Inline `--model=--` is
+  // unaffected because the value is attached.
+  function isSeparateOptionToken(token) {
+    if (token === "--") {
+      return true;
+    }
+    const key = optionKey(token);
+    if (key == null) {
+      return false;
+    }
+    return booleanOptions.has(key) || valueOptions.has(key) || optionalValueOptions.has(key);
+  }
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (passthrough) {
@@ -108,7 +140,7 @@ export function parseArgs(argv, config = {}) {
       }
       if (valueOptions.has(key)) {
         const nextValue = inlineValue ?? argv[index + 1];
-        if (nextValue === undefined) {
+        if (inlineValue === undefined && (nextValue === undefined || isSeparateOptionToken(nextValue))) {
           throw new Error(`Missing value for --${rawKey}`);
         }
         assignOption(key, nextValue);
@@ -140,7 +172,7 @@ export function parseArgs(argv, config = {}) {
     }
     if (valueOptions.has(key)) {
       const nextValue = argv[index + 1];
-      if (nextValue === undefined) {
+      if (nextValue === undefined || isSeparateOptionToken(nextValue)) {
         throw new Error(`Missing value for -${rawKey}`);
       }
       assignOption(key, nextValue);

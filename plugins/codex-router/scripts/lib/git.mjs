@@ -66,7 +66,21 @@ function measureCombinedGitOutputBytes(cwd, argSets, maxBytes) {
 }
 
 function buildBranchComparison(cwd, baseRef) {
-  const mergeBase = gitChecked(cwd, ["merge-base", "HEAD", baseRef]).stdout.trim();
+  const result = git(cwd, ["merge-base", "HEAD", baseRef]);
+  if (result.error) {
+    throw result.error;
+  }
+  // merge-base exits 1 with empty output when the histories share no ancestor.
+  // Any other failure, including an unknown base ref, keeps the git diagnostic.
+  if (result.status === 1) {
+    throw new Error(
+      `No merge base between HEAD and ${baseRef}. Pass --base <ref> or use --scope working-tree.`
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(formatCommandFailure(result));
+  }
+  const mergeBase = result.stdout.trim();
   return {
     mergeBase,
     commitRange: `${mergeBase}..HEAD`,
@@ -77,8 +91,21 @@ function buildBranchComparison(cwd, baseRef) {
 export function ensureGitRepository(cwd) {
   const result = git(cwd, ["rev-parse", "--show-toplevel"]);
   const errorCode = result.error && "code" in result.error ? result.error.code : null;
+  // spawnSync reports ENOENT both when git is missing and when cwd does not exist.
+  if (errorCode === "ENOENT" && typeof cwd === "string" && cwd && !fs.existsSync(cwd)) {
+    throw new Error(`Directory does not exist: ${cwd}`);
+  }
   if (errorCode === "ENOENT") {
     throw new Error("git is not installed. Install Git and retry.");
+  }
+  // Other spawn failures have a null status, which runCommand coerces to 0 when
+  // there is no signal. Treating that as success returns an empty repository root.
+  if (result.error) {
+    const where = typeof cwd === "string" && cwd ? ` in ${cwd}` : "";
+    throw new Error(`Unable to run git${where}: ${result.error.message}`);
+  }
+  if (result.signal) {
+    throw new Error(formatCommandFailure(result));
   }
   if (result.status !== 0) {
     throw new Error("This command must run inside a Git repository.");
