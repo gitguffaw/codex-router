@@ -58,6 +58,55 @@ test("parseArgs rejects missing values for configured value options", () => {
   assert.throws(() => parseArgs(["-m"], { valueOptions: ["model"], aliasMap: { m: "model" } }), /Missing value for -m/);
 });
 
+test("parseArgs does not treat -- or a following known option as an option value", () => {
+  assert.throws(
+    () => parseArgs(["--model", "--", "explain"], { valueOptions: ["model"], stopAtPositional: true }),
+    /Missing value for --model/
+  );
+  assert.throws(
+    () => parseArgs(["-m", "--"], { valueOptions: ["model"], aliasMap: { m: "model" } }),
+    /Missing value for -m/
+  );
+  assert.throws(
+    () => parseArgs(["--effort", "--model", "gpt-5.4", "fix it"], {
+      valueOptions: ["effort", "model"],
+      stopAtPositional: true
+    }),
+    /Missing value for --effort/
+  );
+  assert.throws(
+    () => parseArgs(["--effort", "-m", "gpt-5.4"], {
+      valueOptions: ["effort", "model"],
+      aliasMap: { m: "model" }
+    }),
+    /Missing value for --effort/
+  );
+  assert.throws(
+    () => parseArgs(["-c", "--enable", "multi_agent"], {
+      arrayOptions: ["config", "enable"],
+      aliasMap: { c: "config" }
+    }),
+    /Missing value for -c/
+  );
+
+  const explicit = parseArgs(["--model=--", "explain"], {
+    valueOptions: ["model"],
+    stopAtPositional: true
+  });
+  assert.equal(explicit.options.model, "--");
+  assert.deepEqual(explicit.positionals, ["explain"]);
+
+  const negative = parseArgs(["--timeout-ms", "-1"], { valueOptions: ["timeout-ms"] });
+  assert.equal(negative.options["timeout-ms"], "-1");
+
+  const unknown = parseArgs(["--model", "--future-flag", "explain"], {
+    valueOptions: ["model"],
+    stopAtPositional: true
+  });
+  assert.equal(unknown.options.model, "--future-flag");
+  assert.deepEqual(unknown.positionals, ["explain"]);
+});
+
 test("parseArgs stopAtPositional keeps later dashed tokens in the prompt", () => {
   const parsed = parseArgs(["--wait", "--model", "gpt-5.4", "document", "--wait", "--background"], {
     valueOptions: ["model"],
